@@ -1,0 +1,227 @@
+.\" Manpage for 'RECM'
+.\" Change 0
+.TH man 1 "22 Oct 2021" "1.0" "RECM man page"
+.SH NAME
+.B recm
+Backup and recovery Manager for PostgreSQL database
+.SY
+.SH SYNOPSYS
+recm
+
+recm
+.OP -t target
+
+recm
+.OP -t target 
+.OP -c "<commands...>" 
+.OP @file.recm
+
+recm
+.OP -d deposit 
+
+.SH DESCRIPTION
+The RECM command is used to manage Backup and Recovery for PostgreSQL databases.
+It can be used in interactive mode, where it prints prompt 'RECM>' by default.
+To use it in batch mode, use the argument '-c', or indicate a text file that contain commands.
+The command use a database to manage backups and retention (called a deposit).
+
+.SH OPTIONS
+.PP
+.IP "\fB -h, --help\fR" 8
+Display short help
+.IP "\fB -V, --version\fR" 8
+Display Version and exit.
+.IP "\fB -v, --verbose\fR" 8
+Display more log details.
+.IP "\fB -t, --target <target>\fR" 8
+Connect to a known target and its deposit.
+.IP "\fB -d, --deposit <deposit>\fR" 8
+Connect to a known deposit only.
+.IP "\fB -c, --command <commands>\fR" 8
+Execute commands and exit (optional). 
+.TE 
+
+.PP
+.SH REQUIREMENTS
+.PP
+RECM need a postgreSQL database (called 'DEPOSIT') to store backups metadata.
+Any deposit/cluster will be named by it's configuration parameter 'cluster_name'.
+It is recommanded to place backups on a shared file system, but it is not mandatory. 
+RECM must be installed on each PostgreSQL server you want to manage.
+It does not use SSH.
+
+.PP
+\fBInitialize deposit:\fR
+.PP
+Before to start using recm, you need to create a deposit. A deposit is a database that will keep trace of all backups activities for all registered PostgreSQL cluster.
+
+.IP "Launch recm" 2
+#> \fBrecm\fR <no option>
+.IP "Connect a PostgreSQL cluster" 2
+RECM> \fBconnect cluster /host\fR=deposit_host\fB /port\fR=5432\fB /usr\fR=recmbk\fB /pwd\fR="####"\fB /db\fR=postgres
+.IP "Create the database,user and schema for the deposit" 2
+RECM> \fBcreate deposit /usr\fR=recm_adm\fB /pwd\fR="####"\fB /db\fR=recm_db\fB /name\fR="<cluster_name>"
+
+.PP 
+\fBRegister a new cluster:\fR
+.PP 
+.IP "Create a user on the PostgreSQL cluster" 2
+SQL> \fIcreate role recmbck with password 'xxxx' superuser replication;\fR
+
+For security raison, the role can just have access locally. The pg_hba.conf file can be set for this.
+
+.IP "Connect the cluster and register it to the deposit" 2
+RECM> \fBconnect cluster /host\fR=localhost\fB/port\fR=5432\fB/usr\fR=recmbk\fB/pwd\fR="####"\fB/db\fR=postgres
+.IP "Connect to deposit" 2
+RECM> \fBconnect deposit /host\fR=deposit_host\fB/port\fR=5432\fB/usr\fR=recm_adm\fB/pwd\fR="####"\fB/db\fR=recm_db
+.IP "Register cluster to deposit" 2
+\fBRECM> register cluster;\fR
+.PP
+Once you are registered to the deposit, you can connect more quickly like this :
+.IP "Connect to the cluster and it's associated deposit" 2
+#> \fBrecm -t\fR <cluster_name>
+.IP "Complete minimum configuration of cluster" 2
+RECM> \fBmodify cluster/backupdir\fR="/my_backup_location"\fB/waldir\fR="/mywaldir"
+.IP "Launch a backup" 2
+RECM> \fBbackup full/verbose\fR;
+.IP "Launch a backup in command line (batch mode)" 2
+\fB#> recm \fB-t\fR MYCLUSTER \fB-c\fR "backup full;backup wal/switch;verify backup;"
+.PP
+.SH COMMANDS
+.TP
+A command is composed of one or more keyword.  Each command may have an 'option' (parameter without value), and/or a 'qualifier' (parameter with a value).
+.TQ
+Commands are grouped in different categories(functionality).
+.IP "- Backup commands." 6
+.IP "- Restore commands." 6
+.IP "- Configuration/Managent commands." 6
+
+
+.PP
+\fIBackups commands:\fR
+.PP
+Summary of all available commands for backups.
+.PP
+.IP "\fBbackup config\fR" 4
+Backup all configuration files (pg_hba.conf,postgresql.conf,postgresql.auto.conf,...)
+.IP "\fBbackup meta\fR" 4
+Generate metadata of all databases using pg_dump.
+.IP "\fBbackup full\fR" 4
+Create a full backup of all databases.
+.IP "\fBbackup wal\fR" 4
+Create a backup of WAL files, and optionally remove them from disk.
+
+.PP
+\fIRestore commands:\fR
+.PP
+Summary of all available commands for restore/duplicate.
+.PP
+.IP "\fBduplicate full\fR" 4
+Restore a complete cluster. The difference between a duplicate and a restore is that the duplicate allow you to create a 'standby'.
+.IP "\fBduplicate partial\fR" 4
+Restore partial cluster. The restore can be done at database,schema or table level.
+.IP "\fBrestore config\fR" 4
+Restore configuration files.
+.IP "\fBrestore full\fR" 4
+Restore a complete cluster.  A restore always work on an EMPTY folder.  You need to cleanup the PGDATA folder by yourself before to launch a restore.
+.IP "\fBrestore partial\fR" 4
+Restore a part of the cluster. You may choose databases, schema or even tables to restore.  The default is equal to the restore full.
+.IP "\fBrestore wal\fR" 4
+Restore WAL files.
+
+.PP
+\fIManagement commands:\fR
+.PP
+Summary of all available commands for configuring RECM and Managing clusters.
+.PP
+.IP "\fBcancel backup\fR" 4
+Cancel a backup.
+.IP "\fBclrscr\fR" 4
+Clear the screen
+.IP "\fBconnect cluster\fR" 4
+Connect to a cluster (PostgreSQL cluster)
+.IP "\fBconnect deposit\fR" 4
+Connect to a deposit (PostgreSQL database repository of recm)
+.IP "\fBcreate deposit\fR" 4
+Initialize the deposit catalog
+.IP "\fBcreate restore point\fR" 4
+Create a restore point into the currently connected cluster.
+.IP "\fBdelete backup\fR" 4
+Delete backups. 
+.IP "\fBdelete cluster\fR" 4
+Remove a cluster fro the deposit (no the currently connected)
+.IP "\fBdelete restore point\fR" 4
+remove a restore point from the deposit.
+.IP "\fBdisconnect cluster\fR" 4
+Disconnect currently connected cluster
+.IP "\fBdisconnect deposit\fR" 4
+Disconnect currently connected deposit
+.IP "\fBexit\fR" 4
+Exit from recm
+.IP "\fBhelp\fR" 4
+Display this hort help^
+.IP "\fBhistory\fR" 4
+Display history commands
+.IP "\fBlist backup\fR" 4
+Display list of all backups
+.IP "\fBlist clusters\fR" 4
+Display list of all registered clusters in the deposit.
+.IP "\fBlist restore point\fR" 4
+Display list of all restore point of the currently connected cluster
+.IP "\fBlist wal\fR" 4
+Display list of all wal belongs to currently connected cluster.
+.IP "\fBmodify backup\fR" 4
+Modify a backup
+.IP "\fBmodify cluster\fR" 4
+Modify cluster configuration
+.IP "\fBmodify deposit\fR" 4
+Modify deposit configuration
+.IP "\fBquit\fR" 4
+exit from recm.
+.IP "\fBregister cluster\fR" 4
+Register currently connected cluster to the current deposit
+.IP "\fBregister files\fR" 4
+Register backup files to the deposit
+.IP "\fBreload\fR" 4
+reload configuration
+.IP "\fBset config\fR" 4
+Change conifguration settings
+.IP "\fBset source\fR" 4
+Modify default source directory of backups
+.IP "\fBshow backup\fR" 4
+Display a backup properties
+.IP "\fBshow cluster\fR" 4
+Display cluster configuration
+.IP "\fBshow config\fR" 4
+Display recm settings
+.IP "\fBshow deposit\fR" 4
+Display deposit configuration
+.IP "\fBsql\fR" 4
+Execute one sql statement onto the cluster or deposit
+.IP "\fBstatistic cluster\fR" 4
+Display cluster 's backups statistics
+.IP "\fBstatistic deposit\fR" 4
+Display deposit statistics
+.IP "\fBswitch wal\fR" 4
+Invoke a switch wal onto the cluster
+.IP "\fBverify backup\fR" 4
+Verify backups
+.SH FILES
+.TS
+tab(@),left;
+l  l.
+\fI~/.recm/recm.conf\fR @ Default configuration file.
+\fI~/.recm/recm.history\fR @ List of last commands.
+.TE
+
+.SH EXIT STATUS
+.TS
+tab(@),left;
+l l. 
+0 @ Success
+1 @ Error
+.TE
+
+.SH COPYRIGHT
+.TP
+Copyright 2021 www.Rosh4.com. All rights reserved.
