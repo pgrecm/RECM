@@ -17,13 +17,10 @@
 /**********************************************************************************/
 void COMMAND_RESTOREWAL(int idcmd,char *command_line)
 {
+   if (DEPOisConnected(true) == false) return;
    int cluster_id;
-   if (DEPOisConnected() == false)
-   { ERROR(ERR_NOTCONNECTED,"You must be connected to a DEPOSIT.\n");return; };
 
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    memBeginModule();
    char *query=memAlloc(1024);
@@ -34,7 +31,6 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
       if (varExist(GVAR_WALDIR) == false)
       {
          ERROR(ERR_NOWALDIR,"WAL directory not set.(See show cluster).\n");
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
@@ -45,7 +41,6 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
       if (qualifierIsUNSET("qal_directory") == true)
       { 
          ERROR(ERR_MISQUALVAL,"Qualifier '/directory' is mandatory with '/source'.\n"); 
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       };
@@ -58,7 +53,6 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
       {
          ERROR(ERR_BADCLUNAME,"Unknown cluster name '%s'•\n",varGet("qal_source"));
          DEPOqueryEnd();
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
@@ -101,13 +95,13 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
    char *walfile=memAlloc(512);    walfile[0]=0x00; 
 
    if (qualifierIsUNSET("qal_first")== false)
-   { sprintf(qry_first," and bw.edate >= (select bw2.edate from %s.backup_wals bw2 where bw2.cid=%d and upper(bw2.walfile) like upper('%s%%'))",
+   { sprintf(qry_first," and bw.edate >= (select min(bw2.edate) from %s.backup_wals bw2 where bw2.cid=%d and upper(bw2.walfile) like upper('%s%%'))",
                        varGet(GVAR_DEPUSER),
                        cluster_id,
                        varGet("qal_first"));
    };
    if (qualifierIsUNSET("qal_last")== false)
-   { sprintf(qry_last, " and bw.edate <= (select bw3.edate from %s.backup_wals bw3 where bw3.cid=%d and upper(bw3.walfile) like upper('%s%%'))",
+   { sprintf(qry_last, " and bw.edate <= (select max(bw3.edate) from %s.backup_wals bw3 where bw3.cid=%d and upper(bw3.walfile) like upper('%s%%'))",
                        varGet(GVAR_DEPUSER),
                        cluster_id,
                        varGet("qal_last"));
@@ -146,7 +140,6 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
       if (wal_rows == 0)
    {
       INFO("No WAL backup found.\n");
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -170,28 +163,27 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
         continue;
       };
       VERBOSE("Restoring '%s'\n",outfile);
-      if (RECMopenRead(zipfile) == false)
+      RECMDataFile *hDF=RECMopenRead(zipfile);
+      if (hDF == NULL)
       {
          ERROR(ERR_INVRECMFIL,"Corrupted or invalid RECM file '%s'\n",zipfile);
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
       struct zip_stat sb;
       struct zip_file *zf;
-      int file_index=zip_name_locate(zipHandle, walfile, ZIP_FL_ENC_GUESS);     // Locate file in RECM file
-      if (zip_stat_index(zipHandle,file_index, 0, &sb) == 0)
+      int file_index=zip_name_locate(hDF->zipHandle, walfile, ZIP_FL_ENC_GUESS);     // Locate file in RECM file
+      if (zip_stat_index(hDF->zipHandle,file_index, 0, &sb) == 0)
       {
          TRACE ("scan '%s' == '%s'\n",sb.name,walfile);
          if (strstr(sb.name,walfile) != NULL)
          {
-            RecmFileItemProperties *fileprop=RECMGetFileProperties(file_index);
+            RecmFileItemProperties *fileprop=RECMGetFileProperties(hDF,file_index);
             TRACE("fileprop:mode='%s' / uid=%d / gid=%d\n",maskCreate(fileprop->mode),fileprop->uid,fileprop->gid);
-            zf = zip_fopen_index(zipHandle,file_index, 0);
+            zf = zip_fopen_index(hDF->zipHandle,file_index, 0);
             if (!zf) 
             {
-               ERROR(ERR_INVRECMFIL, "Invalid file '%s': %s\n",zipfile,zip_strerror(zipHandle));
-               globalArgs.verbosity=saved_verbose;
+               ERROR(ERR_INVRECMFIL, "Invalid file '%s': %s\n",zipfile,zip_strerror(hDF->zipHandle));
                memEndModule();
                return;
             }
@@ -199,7 +191,6 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
             if (fd < 0) 
             {
                ERROR(ERR_CREATEFILE, "Cannot create file '%s': %s\n",outfile,strerror(errno));
-               globalArgs.verbosity=saved_verbose;
                memEndModule();
                return;
             }
@@ -211,7 +202,6 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
                 if (len < 0) 
                 {
                     ERROR(ERR_BADPIECE, "Cannot process piece '%s'\n",zipfile);
-                    globalArgs.verbosity=saved_verbose;
                     memEndModule();
                     return;
                 }
@@ -230,9 +220,8 @@ void COMMAND_RESTOREWAL(int idcmd,char *command_line)
             restored++;
          }
       }
-      RECMcloseRead();
+      RECMcloseRead(hDF);
    }
    DEPOqueryEnd();
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
 }

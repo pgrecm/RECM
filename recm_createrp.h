@@ -12,10 +12,7 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
 {
    if (isConnectedAndRegistered() == false) return;
    
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
    
    memBeginModule();
 
@@ -31,7 +28,6 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
    if (optionIsUNSET("opt_temporary") == true && optionIsUNSET("opt_permanent") == true)                                           // Accept only one option at a time
    {
       ERROR(ERR_BADOPTION,"Please, choose between '/temporary' or '/permanent'. Both are not accepted.\n");
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -41,14 +37,12 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
    if (qualifierIsUNSET("qal_name") == true)
    {
       ERROR(ERR_MISQUALVAL,"Missing /name=xxx qualifier.\n");
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    };
    if (isValidName(varGet("qal_name")) == false)                                                                                   // Reject some characters
    {
       ERROR(ERR_INVCHARINNAME,"Invalid character in name '%s'\n",varGet("qal_name"));
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -61,7 +55,6 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
    {
       ERROR(ERR_NAMEEXIST,"Restore point name '%s' already exist.\n",varGet("qal_name"));
       DEPOqueryEnd();
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -73,7 +66,6 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
    {
       ERROR(ERR_CREATRPFAILED,"Could not create restore point '%s'\n",varGet("qal_name"));
       CLUqueryEnd();
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -87,7 +79,6 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
    if (row != 1)
    {
       ERROR(ERR_CREATRPFAILED,"Could not create restore point '%s'\n",varGet("qal_name"));
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -108,8 +99,8 @@ void COMMAND_CREATERP(int idcmd,char *command_line)
                  walfile,
                  restore_point_type);
    int rc=DEPOquery(query,0);
+   TRACE("[rc=%d]\n",rc);
    DEPOqueryEnd();
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
    return;
 };

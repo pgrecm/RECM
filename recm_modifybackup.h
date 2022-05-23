@@ -17,16 +17,10 @@
 /**********************************************************************************/
 void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (DEPOisConnected(true) == false) return;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+
    memBeginModule();
 
    int cluster_id;
@@ -45,7 +39,6 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
       {
          ERROR(ERR_BADCLUNAME,"Unknown cluster ID '%s'\n",varGet("qal_cid"));
          DEPOqueryEnd();
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
@@ -55,7 +48,11 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
    }
    else
    {
-      if (CLUisConnected() == false) return;
+      if (CLUisConnected(true) == false) 
+      {
+         memEndModule();
+         return;
+      }
       strcpy(cluster_name,varGet(GVAR_CLUNAME));
       cluster_id=varGetInt(GVAR_CLUCID);
    }
@@ -127,6 +124,7 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
          strcat(query,qry_state);
          strcat(query,qry_where);
          int row=DEPOquery(query,0);
+         TRACE("[rc=%d]\n",row);
          if (DEPOrowCount() == 0) { ERROR(ERR_BACKUPNOTFND,"Backup UID '%s' not found in DEPOSIT.\n",UID); }
                              else { INFO("Backup UID '%s' changed.\n",UID); };
          DEPOqueryEnd();
@@ -135,7 +133,6 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
       UID++;
       comma=strchr(UID,',');           // Reach next delimiter
    }
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
    return;
 };

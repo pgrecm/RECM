@@ -5,21 +5,15 @@
 /*      Available Option(s):                                                      */
 /*         /verbose                                                               */
 /*         /force              Cluster must be 'disabled' to be deleted           */
-/*         /include_files      Delete backup files with cluster entry             */
+/*         /includefiles       Delete backup files with cluster entry             */
 /*      Available Qualifier(s):                                                   */
-/*         /cid=<STRING>             ID of the cluster to delete                  */
+/*         /cid=<CID>          ID of the cluster to delete                  */
 /**********************************************************************************/
 void COMMAND_DELETECLUSTER(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (DEPOisConnected(true) == false) return; 
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    // Refuse to delete currently connected cluster.
    long current_CID=varGetLong(GVAR_CLUCID);
@@ -84,7 +78,7 @@ void COMMAND_DELETECLUSTER(int idcmd,char *command_line)
 
    if (has_error > 0 && optionIsSET("opt_force") == false)                                                                         // If some files are missing, 
    {                                                                                                                               // option '/force' may help to delete the cluster entry from the DEPOSIT.
-      ERROR(ERR_DELFAILED,"'/cascade' failed. Remove the option '/cascade'. You will have to delete files by yourself.\n");
+      ERROR(ERR_DELFAILED,"'/includefiles' failed. Remove the option '/includefiles'. You will have to delete files by yourself.\n");
       memEndModule();
       return;
    }
@@ -124,8 +118,7 @@ void COMMAND_DELETECLUSTER(int idcmd,char *command_line)
    sprintf(query,"delete from %s.clusters where cid=%s\n",varGet(GVAR_DEPUSER),varGet("qal_cid"));
    row=DEPOquery(query,0);
    DEPOqueryEnd();
-   printf(".\nCluster '%s' deleted. (Physical backup files are not removed).\n",cluster_name);
-   globalArgs.verbosity=saved_verbose;
+   printf(".\nCluster '%s' deleted. (All Physical backup files may not be removed).\n",cluster_name);
    memEndModule();
    return;
 };

@@ -43,9 +43,8 @@ void COMMAND_BACKUPCFG(int idcmd,char *command_line)
       memEndModule();
       return;
    }
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    varAdd(RECM_BCKTYPE,RECM_BCKTYP_CFG);
    
@@ -85,13 +84,53 @@ void COMMAND_BACKUPCFG(int idcmd,char *command_line)
       return;
    };
    RECMClearPieceList();
-   createSequence(1);                                                           // Reset Piece sequence to 1
-   createUID();                                                                 // Create UID      
+                                                                                                                                   // Reset Piece sequence to 1
+   createUID();                                                                                                                    // Create UID      
   
    char *prm=memAlloc(128);
    char *val=memAlloc(1024);
    char *wrkfile = memAlloc(1024);
    char *query=memAlloc(1024);
+   char *tarFileName=memAlloc(1024);
+   
+
+   // Load special information for restore
+   int rcx=CLUquery("select setting from pg_settings where name='log_timezone'",0);
+   varAdd(GVAR_CLUTZ,CLUgetString(0,0));
+   CLUqueryEnd();
+   rcx=CLUquery("select setting from pg_settings where name='DateStyle'",0);
+   varAdd(GVAR_CLUDS,CLUgetString(0,0));
+   CLUqueryEnd();
+   TRACE("set BACKUPDIR='%s'\n",destination_folder);
+   sprintf(query,"insert into %s.backups (cid,bcktyp,bcksts,bck_id,bcktag,hstname,pgdata,pgversion,"
+                                         "timeline,options,bcksize,pcount,ztime,sdate,bckdir)"
+                        " values (%s,'%s',%d,'%s','%s','%s','%s','%s',%ld,%ld,%ld,%ld,'%s','%s','%s')",
+                          varGet(GVAR_DEPUSER),
+                          varGet(GVAR_CLUCID),
+                          varGet(RECM_BCKTYPE),
+                          RECM_BACKUP_STATE_RUNNING,
+                          varGet(RECM_BCKID),
+                          tag,
+                          varGet(GVAR_CLUHOST),
+                          varGet(GVAR_CLUPGDATA),
+                          varGet(GVAR_CLUVERSION),
+                          TL,
+                          BACKUP_OPTIONS,
+                          0L,
+                          1L,
+                          varGet(GVAR_CLUTZ),
+                          varGet(GVAR_CLUDS),
+                          destination_folder);
+   int rows=DEPOquery(query,1);
+   DEPOqueryEnd();
+   
+
+   sprintf(tarFileName,"%s/%s_1_%s.recm",                                                                                          // Only 1 piece
+                       varGet(GVAR_BACKUPDIR),
+                       varGet(RECM_BCKID),
+                       varGet(RECM_BCKTYPE));
+   
+   RECMDataFile *hDF=RECMcreate(tarFileName,1,varGetInt(GVAR_COMPLEVEL));
 
    sprintf(wrkfile,"%s/postgresql.auto.conf",varGet(GVAR_CLUPGDATA));
    if (file_exists(wrkfile)==true) 
@@ -99,7 +138,7 @@ void COMMAND_BACKUPCFG(int idcmd,char *command_line)
       total_backup_files++;
       stat(wrkfile, &st);
       total_backup_size+=st.st_size;
-      RECMaddFile(getFileNameOnly(wrkfile),wrkfile,varGet(GVAR_CLUPGDATA));
+      RECMaddFile(hDF,getFileNameOnly(wrkfile),wrkfile,varGet(GVAR_CLUPGDATA),st.st_mode,st.st_uid,st.st_gid);
       VERBOSE("Add file '%s'\n",wrkfile);
    };
 
@@ -137,7 +176,7 @@ void COMMAND_BACKUPCFG(int idcmd,char *command_line)
             total_backup_files++;
             stat(wrkfile, &st);
             total_backup_size+=st.st_size;
-            RECMaddFile(getFileNameOnly(wrkfile),wrkfile,varGet(GVAR_CLUPGDATA));
+            RECMaddFile(hDF,getFileNameOnly(wrkfile),wrkfile,varGet(GVAR_CLUPGDATA),st.st_mode,st.st_uid,st.st_gid);
             VERBOSE("Add file '%s'\n",wrkfile);
          }
       };
@@ -148,38 +187,22 @@ void COMMAND_BACKUPCFG(int idcmd,char *command_line)
    stat(wrkfile, &st);
    total_backup_size+=st.st_size;
    VERBOSE("Add file '%s'\n",wrkfile);
-   RECMaddFile(getFileNameOnly(wrkfile),wrkfile,varGet(GVAR_CLUPGDATA));
+   RECMaddFile(hDF,getFileNameOnly(wrkfile),wrkfile,varGet(GVAR_CLUPGDATA),st.st_mode,st.st_uid,st.st_gid);
    
-   RECMclose(total_backup_size,total_backup_files);
+   RECMclose(hDF,total_backup_size,total_backup_files);
+   RECMUpdateDepositAtClose(hDF,total_backup_size,total_backup_files);
 
-   // Load special information for restore
-   int rcx=CLUquery("select setting from pg_settings where name='log_timezone'",0);
-   varAdd(GVAR_CLUTZ,CLUgetString(0,0));
-   CLUqueryEnd();
-   rcx=CLUquery("select setting from pg_settings where name='DateStyle'",0);
-   varAdd(GVAR_CLUDS,CLUgetString(0,0));
-   CLUqueryEnd();
-   TRACE("set BACKUPDIR='%s'\n",destination_folder);
-   sprintf(query,"insert into %s.backups (cid,bcktyp,bcksts,bck_id,bcktag,hstname,pgdata,pgversion,"
-                                         "timeline,options,bcksize,pcount,ztime,sdate,bckdir)"
-                        " values (%s,'%s',0,'%s','%s','%s','%s','%s',%ld,%ld,%ld,%ld,'%s','%s','%s')",
-                          varGet(GVAR_DEPUSER),
-                          varGet(GVAR_CLUCID),
-                          varGet(RECM_BCKTYPE),
-                          varGet(RECM_BCKID),
-                          tag,
-                          varGet(GVAR_CLUHOST),
-                          varGet(GVAR_CLUPGDATA),
-                          varGet(GVAR_CLUVERSION),
-                          pgGetCurrentTimeline(),
-                          BACKUP_OPTIONS,
-                          total_backup_size,
-                          1L,
-                          varGet(GVAR_CLUTZ),
-                          varGet(GVAR_CLUDS),
-                          destination_folder);
-   int rows=DEPOquery(query,1);
-   DEPOqueryEnd();
+   // Update status of backup
+   sprintf(query,"update %s.backups set bcksts=%d,bcksize=%ld,pcount=%d,edate=current_timestamp "                                  // Update backup record to become 'AVAILABLE'
+                 " where cid=%s and bck_id='%s'",
+                 varGet(GVAR_DEPUSER),
+                 RECM_BACKUP_STATE_AVAILABLE,
+                 total_backup_size,
+                 1,
+                 varGet(GVAR_CLUCID),
+                 varGet(RECM_BCKID));
+   DEPOquery(query,0);
+   
    // Update cluster record for last backup config date.
    sprintf(query,"update %s.clusters set lstcfg=(select max(bdate) from %s.backups b "
                  " where bcktyp='%s' and cid=%s) where cid=%s",
@@ -191,12 +214,11 @@ void COMMAND_BACKUPCFG(int idcmd,char *command_line)
    rows=DEPOquery(query,1);
    DEPOqueryEnd();
    
-   INFO("Backup UID : %s\n",varGet(RECM_BCKID));
+   INFO("Backup %s UID '%s' succesfully created.\n",varGet(RECM_BCKTYPE),varGet(RECM_BCKID));
    INFO("Total pieces ......... : %-8ld\n",1L);
    INFO("Total files backuped.. : %-8ld\n",total_backup_files);
    INFO("Total Backup size .... : %-8ld (%s)\n",total_backup_size, DisplayprettySize(total_backup_size) );
       
    RECMsetProperties(varGet(RECM_BCKID));
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
 }

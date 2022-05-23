@@ -123,9 +123,9 @@ void SaveConfigFile(const char *prefix,const char *pSection,int kind)
    FILE *Hw=fopen(configFile, "w");
    if (Hw == NULL) 
    { 
-      free(sectionName);
       free(configBackup);
       free(currentSection);
+      free(sectionName);
       unlock_configFile();
       return;
    };
@@ -156,14 +156,15 @@ void SaveConfigFile(const char *prefix,const char *pSection,int kind)
             }
          }
       }
+      free(line);
       fclose(Hr);
    };
    if (updated == 0) { writeSection(Hw,prefix,pSection,1,kind); }
    fclose(Hw);
    globalArgs.configChanged=0;
-   free(sectionName);
    free(configBackup);
    free(currentSection);
+   free(sectionName);
    unlock_configFile();
    TRACE("END\n");
 }
@@ -188,6 +189,7 @@ int LoadConfigFile(const char *prefix,const char *pSection)
    char* line=malloc(line_size);
    char *keyword=malloc(line_size);
    char *value=malloc(line_size);
+   
    int ln=0;
    while (fgets(line, line_size, fh) != NULL)
    {
@@ -231,6 +233,7 @@ int LoadConfigFile(const char *prefix,const char *pSection)
    free(line);
    free(sectionName);
    free(currentSection);
+
    globalArgs.configChanged=0;
    unlock_configFile();
    return(result);
@@ -240,7 +243,7 @@ int LoadConfigFile(const char *prefix,const char *pSection)
 void DisplaySavedClusters(const char *prefix)
 {
    TRACE("ARGS: prefix='%s'\n",prefix);
-   int result=ERR_SECNOTFND;
+   //int result=ERR_SECNOTFND;
    char *configuration_file=buildConfigurationFile();
    
    lock_configFile();

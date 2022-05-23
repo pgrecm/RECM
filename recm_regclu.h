@@ -14,11 +14,7 @@
 /**********************************************************************************/
 void COMMAND_REGCLUSTER(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"You must be connected to a DEPOSIT.\n");
-      return;
-   };
+   if (DEPOisConnected(true) == false) return;
 
    memBeginModule();
    char *query=memAlloc(1024);

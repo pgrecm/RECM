@@ -19,12 +19,40 @@
 /*         /port=<STRING>             Restore engine port used                    */
 /*         /until=<DATE>              Restre until a given date                   */
 /*         /lsn=<STRING>              name of the restore point to delete         */
+/*         /vacuum="none"             Process vacuum after restore/duplicate      */
+/*                                    none :                                      */
+/*                                       skip vacuum(Default)                     */
+/*                                    FULL :                                      */
+/*                                       vacuum FULL                              */
+/*                                    FREEZE :                                    */
+/*                                       Aggressive “freezing” of tuples          */
+/*                                    VERBOSE :                                   */
+/*                                                        */
+/*                                    ANALYZE :                                   */
+/*                                                               */
+/*                                    DISABLE_PAGE_SKIPPING:                      */
+/*                                       Normally, VACUUM will skip pages based   */
+/*                                       on the visibility map                    */
+/*                                    SKIP_LOCKED:                                */
+/*                                       Specifies that VACUUM should not wait    */
+/*                                       for any conflicting locks                */
+/*                                    INDEX_CLEANUP: AUTO|ON|OFF                  */
+/*                                       Normally, VACUUM will skip index         */
+/*                                       vacuuming when there are very few dead   */
+/*                                       tuples in the table                      */
+/*                                    PROCESS_TOAST:                              */
+/*                                       process the corresponding TOAST table    */
+/*                                       for each relation, if one exists         */
+/*                                    TRUNCATE:                                   */
+/*                                       attempt to truncate off any empty pages  */
+/*                                       at the end of the table                  */
 /**********************************************************************************/
 #define FLAG_DATABASE   1
 #define FLAG_SCHEMA     2
 #define FLAG_TABLE      4
 #define FLAG_PROCESSED  8
 #define FLAG_SELECTED  16
+#define FLAG_VACUUMED  32
 #define FLAG_RESET      0
 #define FLAG_ALL_SELECTED (FLAG_DATABASE + FLAG_SCHEMA + FLAG_TABLE)
 
@@ -257,13 +285,13 @@ struct timeval time_start,time_stop;
 
 void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
 {
-   if (isDepositConnected() == false) 
-   { 
-      return;
-   };
+   if (DEPOisConnected(true) == false) return;
+
+//   zip_t *zipHandle=NULL;
+
    memBeginModule();
    
-   if (action == ACTION_RESTORE && isClusterConnected() == true )
+   if (action == ACTION_RESTORE && CLUisConnected(false) == true )
    {
       printf("To perform a restore on the current connected cluster, you have to perform\n");
       printf("the following actions before, to prevent unintentional restoration :\n");
@@ -274,16 +302,22 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       printf("\t   Warning : If you want to restore the db close to the current timestamp, preserve all the WAL files\n");
       printf("\t             located in folder '%s/pg_wal:'\n",varGet(GVAR_CLUPGDATA));
       printf("\t4) Launch recm, and connect to repository only.\n");
-      printf("\t5) Launch the restore...with option '/norecover' or '/pause' \n");
+      printf("\t5) Launch the restore...with option '/norecover' or '/paused' \n");
       printf("\t   Example:\n\t\tRECM> restore full /port=%s /directory=\"%s\"/until=\"2021-01-01 00:00:01\"\n",
              varGet(GVAR_CLUPORT),
              varGet(GVAR_CLUPGDATA));
       memEndModule();
       return;
    }
+   if (qualifierIsUNSET("qal_newname") == true)
+   {
+      char *buildName=malloc(128);
+      sprintf(buildName,"RESTORE_%ld",varGetLong("qal_port"));
+      qualifierSET("qal_newname",buildName);
+      free(buildName);
+   };
    if (action == ACTION_RESTORE)
    {
-      varAdd("qal_newname","restored");
       qualifierUNSET("qal_db");
       qualifierUNSET("qal_schema");
       qualifierUNSET("qal_table");
@@ -304,11 +338,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       qualifierUNSET("qal_table");
    }
 
-   
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    struct timeval time_start,time_stop;
    
@@ -352,7 +382,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       sprintf(query,"select count(*) from %s.clusters where clu_nam='%s'",
                     varGet(GVAR_DEPUSER),
                     varGet("qal_source"));
-      int rows=DEPOquery(query,0); // -12- OK
+      int rc_rs=DEPOquery(query,0); // -12- OK
       if (DEPOgetInt(0,0) == 0)
       {
          ERROR(ERR_BADCLUNAME,"Unknown cluster source name '%s'•\n",varGet("qal_source"));
@@ -364,30 +394,19 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       sprintf(query,"select CID from %s.clusters where clu_nam='%s'",
                        varGet(GVAR_DEPUSER),
                        varGet("qal_source"));
-      rows=DEPOquery(query,0); // -13- OK
+      rc_rs=DEPOquery(query,0); // -13- OK
       cluster_id=DEPOgetInt(0,0);
       DEPOqueryEnd(); // -13- OK
       strcpy(cluster_name,varGet("qal_source"));
       varAdd("qal_cid",QAL_UNSET);                                              // Take care to not try to use /CID after /SOURCE
    }
-/*   else
-   {
-      if (CLUisConnected() == false) 
-      {
-         free(cluster_name);
-         free(query);
-         free(destination_folder);
-         return;
-      };
-      strcpy(cluster_name,varGet(GVAR_CLUNAME));
-   }
-*/
+
    if (qualifierIsUNSET("qal_cid") == false)
    {
       sprintf(query,"select count(*) from %s.clusters where cid=%s",
                     varGet(GVAR_DEPUSER),
                     varGet("qal_cid"));
-      int rows=DEPOquery(query,0);  // -14- OK
+      int rc_rs=DEPOquery(query,0);  // -14- OK
       if (DEPOgetInt(0,0) == 0)
       {
          ERROR(ERR_BADCLUNAME,"Unknown cluster ID %s\n",varGet("qal_cid"));
@@ -399,7 +418,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       sprintf(query,"select clu_nam from %s.clusters where cid=%s",
                        varGet(GVAR_DEPUSER),
                        varGet("qal_cid"));
-      rows=DEPOquery(query,0); // -15- OK
+      rc_rs=DEPOquery(query,0); // -15- OK
       strcpy(cluster_name,DEPOgetString(0,0));
       cluster_id=varGetInt("qal_cid");
       DEPOqueryEnd(); // -15- OK
@@ -482,7 +501,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       sprintf(query,"select bck_id,bwall,ewall,timeline from %s.backups where cid=%d and bcktyp='FULL' and bcksts=0 order by bck_id desc",
                     varGet(GVAR_DEPUSER),
                     cluster_id);
-      int rows=DEPOquery(query,1); // -6- OK
+      int rc_rs=DEPOquery(query,1); // -6- OK
       int row=0;
       char *selected_bck_id=NULL;
       char *f_bck_id=memAlloc(124);
@@ -490,7 +509,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       char *f_ewall =memAlloc(124);
       long f_timeline;
       int stop_on_error=0;
-      while (stop_on_error == 0 && row < rows && selected_bck_id == NULL)
+      while (stop_on_error == 0 && row < rc_rs && selected_bck_id == NULL)
       {
          strcpy(f_bck_id,DEPOgetString(row,0));
          strcpy(f_bwall, DEPOgetString(row,1));
@@ -645,8 +664,8 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
    Array *schlist=convertListToArray(varGet("qal_schema"));
    Array *tbllist=convertListToArray(varGet("qal_table"));
 
-   Array *itemToRestore=arrayCreate(ARRAY_UP_ORDER);
-   int ok=0;
+   //Array *itemToRestore=arrayCreate(ARRAY_UP_ORDER);
+   //int ok=0;
 
    if (directory_exist(destination_folder) == false) 
    { 
@@ -662,8 +681,8 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
    long skipped=0;
    long directories=0;
    long datablock_size=varGetLong(GVAR_CLUREADBLOCKSIZE);                       // Allocate a buffer. Size is coming from variable 'GVAR_CLUREADBLOCKSIZE'
-   if (datablock_size < 1024) datablock_size=163840;
-   char *datablock=memAlloc(datablock_size);
+   if (datablock_size < 1024) datablock_size=16384;
+   char *datablock=memAlloc(datablock_size+1);
 
    char *zipfile=memAlloc(1024);   zipfile[0]=0x00; 
    char *datafile=memAlloc(128);   datafile[0]=0x00; 
@@ -674,7 +693,8 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
    if (strcmp(varGet("qal_uid"),QAL_UNSET) != 0)
    { sprintf(qry_id," and bp.bck_id='%s'",varGet("qal_uid")); }; 
 
-   int rows=DEPOquery(query,1); // -9- 
+
+   int rows=DEPOquery(query,1);                                                 // Loop on all pieces
    if (rows == 0)
    {
       INFO("No Backup found.\n");
@@ -746,8 +766,89 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
         f_bcktl,
         f_bckver,
         f_bckbwl);
+   
+   // Check if we have used tablespace translation (set target /tablespace=xxx /directory="yyyy" )
+/*
+typedef struct TargetPiece TargetPiece;
+struct TargetPiece
+{
+    int    tgtype;   // Target type 'TARGET_TABLESPACE'
+    char   *name;    // Target 'name'
+    char   *value;   // Target 'value'
+    void   *t1;      // used by 'duplicate'
+    void   *t2;      // used by 'duplicate'
+    void   *t3;
+};
+recm_db=# select * from backup_tbs;
+ cid |        bck_id        | tbs_oid | tbs_nam |              tbs_loc              
+-----+----------------------+---------+---------+-----------------------------------
+   3 | 000361df4bb22733cff8 |  131219 | tbs2    | /tmp/data/TBS0_6666
+   3 | 000361df4bb22733cff8 |  255325 | tbs3    | /tmp/data/TBS1_6666
+   1 | 00016205299d02278f38 |  255459 | tbs1    | /Library/PostgreSQL/12/CLU12_TBS1
+   1 | 0001620529131d5746b8 |  255459 | tbs1    | /Library/PostgreSQL/12/CLU12_TBS1
+   1 | 0001620529d003da9e38 |  255459 | tbs1    | /Library/PostgreSQL/12/CLU12_TBS1
 
    
+*/
+   if (target_list == NULL) target_list=arrayCreate(ARRAY_UP_ORDER); 
+   if (arrayCount(target_list) > 0)
+   {
+      char *qry2=memAlloc(1024);
+      sprintf(qry2,"select tbs_nam,tbs_oid,tbs_loc from %s.backup_tbs where bck_id='%s' order by tbs_nam",
+                   varGet(GVAR_DEPUSER),
+                   full_bck_id);
+      int rctbs=DEPOquery(qry2,0);
+      int error_count=0;
+      if (rctbs > 0)
+      {
+         char *tbsnam=memAlloc(512);
+         char *tbsoid=memAlloc(128);
+         char *tbspth=memAlloc(1024);
+         int trow=0;
+         while (trow < rctbs)
+         {
+            strcpy(tbsnam,DEPOgetString(trow,0));
+            strcpy(tbsoid,DEPOgetString(trow,1));
+            strcpy(tbspth,DEPOgetString(trow,2));
+            ArrayItem *fnd=arrayFind(target_list,tbsnam);
+            if (fnd != NULL && strcmp(fnd->key,tbsnam) == 0)
+            { 
+               TargetPiece *tp=(TargetPiece *)fnd->data;
+               tp->t1=strdup(tbsoid);
+               tp->t2=strdup(tbspth);
+               VERBOSE("Target tablespace '%s' [%s] will be remapped to '%s'\n",tp->name,tp->t1,tp->value);
+               TRACE("TargetPiece : name='%s' value='%s' t1='%s' t2='%s' t3='%s'\n",tp->name,tp->value,tp->t1,tp->t2,tp->t3);
+
+               if (directory_exist(tp->value) == false)
+               {
+                  ERROR(ERR_DIRNOTFND,"Directory '%s' (Remap of tablespace '%s') must exist.\n",tp->value,tp->name);
+                  error_count++;
+               }
+               if (directoryIsWriteable(tp->value) == false)
+               {
+                  ERROR(ERR_BADDIRPERM,"Missing write access to directory '%s' (Remap of tablespace '%s').\n",tp->value,tp->name);
+                  error_count++;        
+               }
+               if (directoryIsEmpty(tp->value) == false)
+               {
+                  ERROR(ERR_DIRNOTEMPTY,"Directory '%s' (Remap of tablespace '%s') must be empty.\n",tp->value,tp->name);
+                  error_count++;
+               }             
+            }
+            else
+            {
+               VERBOSE("Target tablespace '%s' will not be remapped.\n",tbsnam);
+            }
+            trow++;
+         }
+      };
+      DEPOqueryEnd();
+      if (error_count > 0)
+      {
+         memEndModule();
+         return;
+      }
+   };
    // Stop PostgreSQL engine : PGDATA is '/directory=' and PORT is '/port='
    //(const char *AUXPGDATA,long AUXPORT)
    //if (pgStopAuxiliaryEngine(destination_folder,cluster_port) == false) VERBOSE("Engine is not running (%s)",last_pg_ctl_message);
@@ -827,11 +928,12 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
    }
    if (optionIsSET("opt_standby") == true)
    {
+      // Option '/paused' is ignored for '/standby'
       pgAddRecoveryParametersForStandby(cluster_id,destination_folder,tmpWALDIR,psg_mode,psg_date,WALisCompressed);
    }
    else
    {
-      pgAddRecoveryParameters(destination_folder,tmpWALDIR,psg_mode,psg_date,WALisCompressed,option_inclusive);
+      pgAddRecoveryParameters(destination_folder,tmpWALDIR,psg_mode,psg_date,WALisCompressed,option_inclusive,optionIsSET("opt_paused"));
    }
    pgCreateSignalRecoveryFile(optionIsSET("opt_standby"),destination_folder);
    free(tmpWALDIR);
@@ -847,8 +949,10 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
    char *saved_hba =memAlloc(1024);saved_hba[0]=0x00;
 
    int  tbs_seq=0;       // Tablespace sequence ID (Restore replace tablespace link to a local folder named 'TBS<seq>_<port>'
-   long failed=0;
+   int failed=0;
    row=0;
+   RECMDataFile *hDF;
+   VERBOSE("Restore will read %d pieces\n",rows);
    while (row < rows && failed == 0)
    {
       strcpy(f_bck_id,DEPOgetString(row,QRYR_BCKID));
@@ -857,6 +961,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       f_bckpci=DEPOgetLong(row,QRYR_PCID);
       f_bcktl =DEPOgetLong(row,QRYR_TL);
       f_bcksiz=DEPOgetLong(row,QRYR_BCKSIZ);
+      VERBOSE("[%d/%d] '%s'\n",(row+1),rows,f_bckfil);
       if (row == 0)                                                             // We have the BCK_ID. We can load objects we want to restore
       {
          // Now loading all user objects that will be 'included' by default
@@ -871,6 +976,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                       cluster_id,
                       f_bck_id);
          int rc=DEPOquery(query,0); // -11- ok
+         TRACE("[rc=%d]\n",rc);
          for(int n=0; n < DEPOrowCount();n++)
          {
             TRACE("%d/%ld)Loading table (%s) '%s'.'%s'\n",n,DEPOrowCount(),DEPOgetString(n,1),DEPOgetString(n,2),DEPOgetString(n,3));
@@ -888,8 +994,6 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
          }
          DEPOqueryEnd(); // -11- ok
          // Now Verify with passed arguments what we want to restore
-         int sel_tbl=0;
-         int sel_sch=0;
          /* CHANGE : 0xA0009
              Accept filters like : 'tab*, '-tab*','dba*state'
              on /databae,/schema and /table
@@ -972,40 +1076,75 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
          ok=false;
          failed++;
       };
-      if (ok == true && row > 0 && f_bckpci == 1 && strcmp(f_bcktyp,"FULL") == 0) { ok=false; }  // Just ignore any other FULL backup
-      if (ok == true && RECMopenRead(f_bckfil) == false) { failed++;ok=false; };
+      if (ok == true && row > 0 && f_bckpci == 1 && strcmp(f_bcktyp,"FULL") == 0) { ok=false; };  // Just ignore any other FULL backup
+      if (ok == true)
+      {
+         hDF=RECMopenRead(f_bckfil);
+         if (hDF == NULL) { failed++;ok=false; };
+      };
       if (ok == true)
       {
          struct zip_stat sb;
          struct zip_file *zf;
          char *OutFileName=memAlloc(1024);
          int i=0;
-         long entries=RECMGetEntriesRead();
+         long entries=RECMGetEntriesRead(hDF);
          TRACE("Entries in container : %ld\n",entries);
          while( i < entries)
          {  
-            if (zip_stat_index(zipHandle, i, 0, &sb) == 0) 
+            if (zip_stat_index(hDF->zipHandle, i, 0, &sb) == 0) 
             {
-               RecmFileItemProperties *fileprop=RECMGetFileProperties(i);
+               TRACE("Entry %d is '%s'\n",i,sb.name); 
+               RecmFileItemProperties *fileprop=RECMGetFileProperties(hDF,i);
+               if (fileprop == NULL) { TRACE("fileprop is NULL\n"); }
+                                else { TRACE("%x(%s) - %u:%u\n",fileprop->mode,maskCreate(fileprop->mode),fileprop->uid,fileprop->gid); };
                char *lnk_delimiter=strstr(sb.name,"@?@");
                if (lnk_delimiter != NULL)                                       // This is a LINK to a tablespace. Restore change link to a local folder named ''TBS<seq>_<port>''
                {
                   TRACE ("Found LINK:'%s'\n",sb.name);
-                  char *left_part=malloc(strlen(sb.name)+1);
-                  char *right_part=malloc(strlen(sb.name)+1);
+                  char *left_part=malloc(1024);
+                  char *right_part=malloc(1024);
                   lnk_delimiter[0]=0x00;
                   strcpy(left_part,sb.name);
                   lnk_delimiter+=3;
-                  strcpy(right_part,lnk_delimiter);
-                  sprintf(right_part,"%s/TBS%d_%ld",destination_folder,tbs_seq,cluster_port); // Force folder name to become 'TBSxx_pppp'
-                  tbs_seq++;
+                                                                                // Below 'pg_tblspc',we have a tablespace OID as LINK name.
+                                                                                // If we used 'set target/tablespace='nnnn', we may change the directory target
+                  char *tbsoid=left_part;
+                  tbsoid+=strlen(left_part)-1;
+                  while (tbsoid[0] != '/') tbsoid--;
+                  if (tbsoid[0] == '/') { tbsoid++;
+                                          ArrayItem *itm=arrayFirst(target_list);
+                                          ArrayItem *fnd=NULL;
+                                          while (itm != NULL && fnd == NULL)
+                                          {
+                                             TargetPiece *tp=(TargetPiece *)itm->data;
+                                             if (strcmp(tp->t1,tbsoid) == 0) { fnd=itm; };
+                                             itm=arrayNext(target_list);
+                                          };
+                                          //char *src=lnk_delimiter;                            // We keep the default directory for the tablespace                    
+                                          if (fnd != NULL)
+                                          {
+                                             TargetPiece *tp=(TargetPiece *)fnd->data;
+                                             strcpy(right_part,tp->value);                    // We take the new TARGET directory for the tablespace
+                                          }
+                                          else
+                                          {
+                                             sprintf(right_part,"%s/TBS%d_%ld",destination_folder,tbs_seq,cluster_port); // Force folder name to become 'TBSxx_pppp'
+                                             tbs_seq++;
+                                          };
+                                        }
+                                   else {
+                                          sprintf(right_part,"%s/TBS%d_%ld",destination_folder,tbs_seq,cluster_port); // Force folder name to become 'TBSxx_pppp'
+                                          tbs_seq++;
+                                        };
                   char *x=strstr(sb.name,"./");
                   if (x != NULL) { x+=2; } else { x=(char *)&sb.name; }
                   sprintf(OutFileName,"%s/%s",destination_folder,x);
                   int rc=mkdir(right_part,S_IRWXU | S_IRWXG | S_IRWXO);
                   TRACE("Create directory '%s' (rc=%d : errno=%d)\n",right_part,rc,errno);
                   rc=symlink(right_part,OutFileName);
-                  
+                  VERBOSE("symlink ('%s','%s')\n",right_part,OutFileName);
+
                   char *mapfile=malloc(1024);
                   char *linknameonly=malloc(1024);
                   char *wx=strchr(x,'/');
@@ -1035,16 +1174,18 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                   char *nn=x; 
                   nn+=strlen(x);
                   nn--;
+                  TRACE("nn='%s'\n",nn);
                   if (nn != NULL && strcmp(nn,"/") == 0)
                   {
                      sprintf(OutFileName,"%s/%s",destination_folder,x);
-                     TRACE("Create Directory '%s'\n",OutFileName);
                      if (directory_exist(OutFileName) == false) 
                      {
-                        int rc=mkdir (OutFileName,fileprop->mode); 
+                        int rc=mkdirs (OutFileName,S_IRUSR|S_IWUSR|S_IXUSR); //fileprop->mode);
+                        TRACE("mkdir '%s' [rc=%d] [mode=%2x |uid=%d |gid=%d]\n",OutFileName,rc,fileprop->mode,fileprop->uid,fileprop->gid);
                      }
                      else
                      {
+                        TRACE("dir '%s' already exist [mode=%2x |uid=%d |gid=%d]\n",OutFileName,fileprop->mode,fileprop->uid,fileprop->gid);
                      }
                      directories++;
                   }
@@ -1053,6 +1194,16 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                      // All WAL files are saved into 'pg_wal' directory directly'
                      if (strcmp(f_bcktyp,"WAL") == 0) { sprintf(OutFileName,"%s/recm_wals/%s",destination_folder,x); }
                                                  else { sprintf(OutFileName,"%s/%s",destination_folder,x); }
+
+                     // Due to // restore, we need to check if target directory is already restored.
+                     char *wrkstr=malloc(1024);
+                     strcpy(wrkstr,extractFilePath(OutFileName));
+                     if (directory_exist(wrkstr) == false) 
+                     {
+                        int rc=mkdirs (wrkstr,S_IRUSR|S_IWUSR|S_IXUSR); //fileprop->mode);
+                        TRACE("mkdir '%s' [rc=%d] [mode=%2x |uid=%d |gid=%d]\n",OutFileName,rc,fileprop->mode,fileprop->uid,fileprop->gid);
+                     };
+                     
                      displayProgressBar(i,entries,80,NULL);
                      // Verify if we can restore this file
                      int accept=1;
@@ -1086,10 +1237,10 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                      }
                      if (accept == 1)
                      {
-                        zf = zip_fopen_index(zipHandle, i, 0);
+                        zf = zip_fopen_index(hDF->zipHandle, i, 0);
                         if (!zf) 
                         {
-                           ERROR(ERR_BADPIECE, "Cannot process piece '%s': %s\n",f_bckfil,zip_strerror(zipHandle));
+                           ERROR(ERR_BADPIECE, "Cannot process piece '%s': %s\n",f_bckfil,zip_strerror(hDF->zipHandle));
                            memEndModule();
                            return;
                         }
@@ -1101,10 +1252,10 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                            memEndModule();
                            return;
                         }
-                        long long sum = 0;
+                        zip_uint64_t sum = 0;
                         int len=1;
-                        if (datablock_size <= 256) datablock_size=16384;
-                        while (sum != sb.size && len > 0) 
+                        TRACE("sb.size=%llu\n",sb.size);
+                        while (sum != sb.size && len > 0 ) 
                         {
                             len = zip_fread(zf, datablock, datablock_size);
                             if (len < 0) 
@@ -1114,6 +1265,11 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                                 return;
                             }
                             int written=write(fd, datablock, len);
+                            if (written < 0)
+                            {
+                               int rc=errno;
+                               TRACE("write block size=%d error (errno=%d - %s)\n",len,rc,strerror(rc));
+                            }
                             sum += len;
                         }
                         close(fd);
@@ -1127,11 +1283,16 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                      }
                   }
                }
+               free(fileprop);
+            }
+            else
+            {
+               TRACE("Failed entry %i\n",i);
             }
             i++;
          }
          displayProgressBar(entries,entries,80,NULL);
-         RECMcloseRead();
+         RECMcloseRead(hDF);
       };
       row++;
    }
@@ -1154,17 +1315,10 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
 
    
    // Create custom postgresql.conf file
-   if (strcmp(varGet("qal_newname"),QAL_UNSET) != 0) 
+   if (qualifierIsUNSET("qal_newname") == false ) 
       { create_config_file(destination_folder,cluster_port,varGet("qal_newname")); }
    else
       { create_config_file(destination_folder,cluster_port,NULL); };
-
-   if (optionIsSET("opt_pause") == true && optionIsSET("opt_norecover") == false)
-   {
-      int ch;
-      printf("** Restore Done. ** : PRESS ENTER START THE RECOVERY.\n");
-      while((ch = getc(stdin)) != 10);
-   };
 
    chmod(destination_folder,maskTranslate(varGet(GVAR_CLUMASK_RESTORE)));
 
@@ -1235,6 +1389,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
             VERBOSE("Opening cluster instance...\n");
             rc_tl=AUXquery("SELECT timeline_id FROM pg_control_checkpoint()",0);
             long TIMELINE_AFTER=AUXgetLong(0,0);
+            TRACE("Auxiliary Timeline is %ld [rc=%d]\n",TIMELINE_AFTER,rc_tl);
             AUXqueryEnd();
                
             INFO("Database successfully restored.\n");
@@ -1323,6 +1478,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                         TRACE("STATEMENT:'%s'\n",wrk_statement);
                         dblist_res=PQexec(dblist_cnx,wrk_statement);
                         ExecStatusType rc=PQresultStatus(dblist_res);
+                        TRACE("PQresultStatus [rc=%d]\n",rc);
                         if (PQresultStatus(dblist_res) != PGRES_COMMAND_OK)
                         {
                            TRACE("RC=%s failed\n",PQerrorMessage(dblist_cnx));
@@ -1346,6 +1502,72 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       }
       if (dblist_cnx != NULL) PQfinish(dblist_cnx);
 
+      if (optionIsSET("opt_vacuum") == true)
+      {
+         char *VACUUM_CMD=memAlloc(1024);
+         char *vacuum_options=memAlloc(512);
+         if (qualifierIsUNSET("qal_options") == false)
+         {
+            strToUpper(vacuum_options,varGet("qal_options"));
+         }
+         else
+         {
+            strcpy(vacuum_options,"FULL ");
+            if (optionIsSET("opt_verbose") == true) strcat(vacuum_options,"VERBOSE ");
+         };
+         strcpy(VACUUM_CMD,"vacuum ");
+         if (strstr(vacuum_options,"FULL") != NULL) strcat(VACUUM_CMD,"full ");
+         if (strstr(vacuum_options,"FREEZE") != NULL) strcat(VACUUM_CMD,"freeze ");
+         if (strstr(vacuum_options,"VERBOSE") != NULL) strcat(VACUUM_CMD,"verbose ");
+         if (strstr(vacuum_options,"ANALYZE") != NULL) strcat(VACUUM_CMD,"analyze ");
+         if (strstr(vacuum_options,"DISABLE_PAGE_SKIPPING") != NULL) strcat(VACUUM_CMD,"disable_page_skipping ");
+         if (strstr(vacuum_options,"INDEX_CLEANUP:OFF") != NULL) strcat(VACUUM_CMD,"Index_cleanup:off ");
+         if (strstr(vacuum_options,"INDEX_CLEANUP:ON")  != NULL) strcat(VACUUM_CMD,"Index_cleanup:on ");
+         if (strstr(vacuum_options,"INDEX_CLEANUP:AUTO") != NULL) strcat(VACUUM_CMD,"Index_cleanup:auto ");
+         if (strstr(vacuum_options,"PROCESS_TOAST") != NULL) strcat(VACUUM_CMD,"process_toast ");
+         if (strstr(vacuum_options,"TRUNCATE") != NULL) strcat(VACUUM_CMD,"truncate ");
+         VERBOSE("Starting '%s'...\n",VACUUM_CMD);           
+         strcat(VACUUM_CMD,";");
+         dbLoop=arrayFirst(objlist);                                    // Now, loop on ALL databases to perform VACUUM
+         while (dbLoop != NULL)
+         {
+            ItemToRestore *db_obj=(ItemToRestore *)dbLoop->data;
+            if ((db_obj->flag & FLAG_VACUUMED) != FLAG_VACUUMED)
+            {
+               if (dblist_cnx != NULL) PQfinish(dblist_cnx);
+               dblist_cnx=NULL;
+               sprintf(connectString,"dbname=%s host=localhost port=%s",
+                                  db_obj->dbNam,
+                                  varGet("qal_port"));
+               TRACE("AUX connection:%s\n",connectString);
+               dblist_cnx = PQconnectdb(connectString);
+               if (PQstatus(dblist_cnx) == CONNECTION_OK)
+               {
+                  VERBOSE("Executing '%s' on database '%s'\n",VACUUM_CMD,db_obj->dbNam);
+                  dblist_res=PQexec(dblist_cnx,VACUUM_CMD);
+                  PQclear(dblist_res);
+                  
+                  /* for all objects that belongs to the same database, we set it as 'VACUUMED' */
+                  ArrayItem *obj=arrayNext(objlist);
+                  while (obj != NULL)
+                  {
+                     ItemToRestore *item=(ItemToRestore *)obj->data;
+                     if (strcmp(item->dbNam,db_obj->dbNam) == 0) item->flag=setFlag(item->flag,FLAG_VACUUMED);
+                     obj=arrayNext(objlist);
+                  }
+               }
+               else
+               {
+                  TRACE("AUX connection failed\n");
+               };
+               db_obj->flag=setFlag(db_obj->flag,FLAG_PROCESSED);
+            }
+            arraySetCurrent(objlist,dbLoop);
+            dbLoop=arrayNext(objlist);
+         }
+         if (dblist_cnx != NULL) PQfinish(dblist_cnx);
+      } /* end of '/vacuum' command */
+
       // Now, check if we can drop an empty database
       if (strlen(masterdb) > 0)
       {
@@ -1366,6 +1588,7 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
                    sprintf(wrk_statement,"drop database \"%s\"",item->dbNam);
                    dblist_res=PQexec(dblist_cnx,wrk_statement);
                    ExecStatusType rc=PQresultStatus(dblist_res);
+                   TRACE("PQresultStatus [rc=%d]\n",rc);
                    if (PQresultStatus(dblist_res) != PGRES_COMMAND_OK)
                    {
                       TRACE("RC=%s failed\n",PQerrorMessage(dblist_cnx));
@@ -1452,6 +1675,5 @@ void COMMAND_DUPLICATEPARTIAL(int action,int idcmd,char *command_line)
       unlink(saved_auto);
    };
    memEndModule();
-   globalArgs.verbosity=saved_verbose;
 }
 

@@ -13,7 +13,7 @@
 /*         /before=<STRING>          Delete all backup where UID is older         */
 /*         /after=<STRING>           Delete all backup where UID is younger       */
 /**********************************************************************************/
-void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
+void COMMAND_DELETEBACKUP (int idcmd,char *command_line)
 {
    if (isConnectedAndRegistered() == false) return;
    
@@ -24,10 +24,10 @@ void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
    }
    
    memBeginModule();
+
    int opt_noremove=optionIsSET("opt_noremove");
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    int min_opt=0;
    char *bckid_list=memAlloc(1024);
@@ -92,10 +92,8 @@ void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
    };
    char *f_bcktyp=memAlloc(20);
    char *f_bck_id=memAlloc(20);
-   char *f_bcksts=memAlloc(10);
    char *f_bdate=memAlloc(40);
    char *sf_pcnam=memAlloc(1024);
-   char *sf_pc_id=memAlloc(128);
    int rows=DEPOquery(query,0);
    if (rows == 0)
    {
@@ -187,6 +185,5 @@ void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
       rc=DEPOquery(query,0);
       DEPOqueryEnd();
    }
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
 }

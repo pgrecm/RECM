@@ -11,12 +11,9 @@
 /**********************************************************************************/
 void COMMAND_LISTRP(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   if ((CLUisConnected() == false) &&
+   if (DEPOisConnected(true) == false) return;
+
+   if ((CLUisConnected(false) == false) &&
         qualifierIsUNSET("qal_source") == true && 
         qualifierIsUNSET("qal_cid") == true)
    {
@@ -29,7 +26,7 @@ void COMMAND_LISTRP(int idcmd,char *command_line)
    long cluster_id;
    char *cluster_name=memAlloc(128); 
    
-   if (CLUisConnected() == true)
+   if (CLUisConnected(false) == true)
    {
       if (strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0) cluster_id=varGetLong(GVAR_CLUCID);
       if (strcmp(varGet(GVAR_CLUNAME),VAR_UNSET_VALUE) != 0) strcpy(cluster_name,varGet(GVAR_CLUNAME));

@@ -14,11 +14,19 @@
 /**********************************************************************************/
 void COMMAND_RESTOREMETA(int idcmd,char *command_line)
 {
+   long cluster_id=0;
+//   zip_t *zipHandle;
+
+   if (DEPOisConnected(true) == false) return;
+   memBeginModule();
+   char *SRCDIR=memAlloc(1024);
+
    if (isConnectedAndRegistered() == false) return;
 
    if (varExist(GVAR_BACKUPDIR) == false)
    {
       ERROR(ERR_NOBACKUPDIR,"Backup directory not set.(See show cluster).\n");
+      memEndModule();
       return;
    }
    if (directory_exist(varGet(GVAR_BACKUPDIR)) == false) 
@@ -28,10 +36,42 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
    if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
    {
       ERROR(ERR_INVDIR,"Invalid Backup directory '%s'\n",varGet(GVAR_BACKUPDIR));
+      memEndModule();
       return;
    };
+   char *query=memAlloc(1024);
+   char *cluster_name=memAlloc(128);
+   
+   if (varGet(GVAR_CLUCID) != NULL && strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0) cluster_id=varGetLong(GVAR_CLUCID);
 
-   memBeginModule();
+   if (qualifierIsUNSET("qal_cid") == false)
+   {
+      sprintf(query,"select count(*) from %s.clusters where cid=%s",
+                    varGet(GVAR_DEPUSER),
+                    varGet("qal_cid"));
+      int rows=DEPOquery(query,0);
+      if (DEPOgetLong(0,0) == 0)
+      {
+         ERROR(ERR_BADCLUNAME,"Unknown cluster ID %s\n",varGet("qal_cid"));
+         DEPOqueryEnd();
+         memEndModule();
+         return;
+      }
+      DEPOqueryEnd();
+      sprintf(query,"select clu_nam from %s.clusters where cid=%s",
+                       varGet(GVAR_DEPUSER),
+                       varGet("qal_cid"));
+      rows=DEPOquery(query,0);
+      strcpy(cluster_name,DEPOgetString(0,0));
+      cluster_id=varGetInt("qal_cid");
+      DEPOqueryEnd();
+   }
+   else
+   {
+      strcpy(cluster_name,varGet(GVAR_CLUNAME));
+   }
+   
+   
    char *destination_folder=memAlloc(1024);
    
    if (qualifierIsUNSET("qal_directory") == false)
@@ -58,16 +98,12 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
 
    TRACE("destination_folder=%s\n",destination_folder);
 
-   long restored=0;
    long datablock_size=getHumanSize(GVAR_CLUREADBLOCKSIZE);                       // Allocate a buffer. Size is coming from variable 'GVAR_CLUREADBLOCKSIZE'
    if (datablock_size < 1024) datablock_size=163840;
    char *datablock=memAlloc(datablock_size);
 
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
-   char *query=memAlloc(1024);
    char *qry_id=memAlloc(128);     qry_id[0]=0x00; 
    char *qry_file=memAlloc(128);   qry_file[0]=0x00;
    char *qry_tag=memAlloc(128);    qry_tag[0]=0x00;
@@ -81,12 +117,13 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
    { sprintf(qry_tag," and b.bcktag like '%%%s%%'",varGet("qal_tag")); }; 
 
 
-   sprintf(query,"select bp.bck_id,b.bckdir||'/'||bp.pname,coalesce(to_char(b.bdate,'%s'),'0000-00-00 00:00:00') from %s.backup_pieces bp,%s.backups b"
-                 " where bp.bck_id=b.bck_id and bp.cid=b.cid and b.cid=%s and b.bcksts=0 and b.bcktyp='META'",
+   sprintf(query,"select bp.bck_id,bp.pname,coalesce(to_char(b.bdate,'%s'),'0000-00-00 00:00:00'),b.bckdir"
+                 " from %s.backup_pieces bp,%s.backups b"
+                 " where bp.bck_id=b.bck_id and bp.cid=b.cid and b.cid=%ld and b.bcksts=0 and b.bcktyp='META'",
                  varGet(GVAR_CLUDATE_FORMAT),
                  varGet(GVAR_DEPUSER),
                  varGet(GVAR_DEPUSER),
-                 varGet(GVAR_CLUCID));
+                 cluster_id);
    strcat(query,qry_id);
    strcat(query,qry_tag);
 
@@ -102,20 +139,22 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
    if (wal_rows == 0)
    {
       INFO("No META backup found.\n");
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
    for(int i=0;i < wal_rows;i++)
    {
-      strcpy(bck_id,DEPOgetString(i,0));
-      strcpy(pname,DEPOgetString(i,1));
-      strcpy(bck_dat,DEPOgetString(i,2));
+      strcpy(bck_id,DEPOgetString(i,0));                                                                                           // UID
+      strcpy(bck_dat,DEPOgetString(i,2));                                                                                          // date
+      if (varExist(SOURCE_DIRECTORY) == true) { strcpy(SRCDIR,varGet(SOURCE_DIRECTORY)); }                                         // different SOURCE
+                                         else { strcpy(SRCDIR,DEPOgetString(i,3));};                                               // Original Path
+      sprintf(pname,"%s/%s",SRCDIR,DEPOgetString(i,1));
+      
       VERBOSE("Found backup UID '%s', piece '%s' of date '%s'\n",bck_id,pname,bck_dat);
-      if (RECMopenRead(pname) == false)
+      RECMDataFile *hDF=RECMopenRead(pname);
+      if (hDF == NULL)
       {
          ERROR(ERR_INVRECMFIL,"Corrupted or invalid RECM file '%s'\n",pname);
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
@@ -124,9 +163,9 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
          struct zip_stat sb;
          struct zip_file *zf;
          int file_index=0;
-         while( file_index < zip_get_num_entries(zipHandle, 0))
+         while( file_index < zip_get_num_entries(hDF->zipHandle, 0))
          {
-            if (zip_stat_index(zipHandle, file_index, 0, &sb) == 0) 
+            if (zip_stat_index(hDF->zipHandle, file_index, 0, &sb) == 0) 
             {
                char *filnam=extractFileName(sb.name);
                sprintf(outfile,"%s/%s",destination_folder,filnam);
@@ -156,14 +195,13 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
                };
                if (accept == true)
                {
-                  RecmFileItemProperties *fileprop=RECMGetFileProperties(file_index);
+                  RecmFileItemProperties *fileprop=RECMGetFileProperties(hDF,file_index);
                   if (flg_overwrite == 0) { VERBOSE("Restoring file '%s'.\n",outfile); }
                                      else { VERBOSE("Restore file '%s' (overwrite by request).\n",outfile); };
-                  zf = zip_fopen_index(zipHandle, file_index, 0);
+                  zf = zip_fopen_index(hDF->zipHandle, file_index, 0);
                   if (!zf) 
                   {
-                     ERROR(ERR_BADPIECE, "Cannot process piece '%s': %s\n",pname,zip_strerror(zipHandle));
-                     globalArgs.verbosity=saved_verbose;
+                     ERROR(ERR_BADPIECE, "Cannot process piece '%s': %s\n",pname,zip_strerror(hDF->zipHandle));
                      memEndModule();
                      return;
                   }
@@ -171,7 +209,6 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
                   if (fd < 0) 
                   {
                      ERROR(ERR_CREATEFILE, "Cannot create file '%s': %s\n",outfile,strerror(errno));
-                     globalArgs.verbosity=saved_verbose;
                      memEndModule();
                      return;
                   }
@@ -182,7 +219,6 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
                       if (len < 0) 
                       {
                           ERROR(ERR_BADPIECE, "Cannot process piece '%s'\n",pname);
-                          globalArgs.verbosity=saved_verbose;
                           memEndModule();
                           return;
                       }
@@ -203,8 +239,8 @@ void COMMAND_RESTOREMETA(int idcmd,char *command_line)
             file_index++;
          }
       }
+      RECMcloseRead(hDF);
    }
    DEPOqueryEnd();
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
 }

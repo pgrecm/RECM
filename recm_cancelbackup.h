@@ -4,9 +4,7 @@ void COMMAND_CANCELBACKUP(int idcmd,char *command_line)
 {
    if (isConnectedAndRegistered() == false) return;
 
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
    
    memBeginModule();
 
@@ -23,7 +21,6 @@ void COMMAND_CANCELBACKUP(int idcmd,char *command_line)
    if (rc != 1)
    {
       ERROR(ERR_ENDBCKFAIL,"Could not initiate stop backup : %s",CLUgetErrorMessage());
-      globalArgs.verbosity=saved_verbose;
       CLUqueryEnd();
       memEndModule();
       return;
@@ -31,7 +28,6 @@ void COMMAND_CANCELBACKUP(int idcmd,char *command_line)
    if (strcmp(CLUgetString(0,0),"f") == 0)
    {
       INFO("NO backup is currently running\n");
-      globalArgs.verbosity=saved_verbose;
       CLUqueryEnd();
       memEndModule();
       return;
@@ -47,14 +43,12 @@ void COMMAND_CANCELBACKUP(int idcmd,char *command_line)
    if (rc != 1)
    {
       ERROR(ERR_ENDBCKFAIL,"Could not initiate stop backup : %s",CLUgetErrorMessage());
-      globalArgs.verbosity=saved_verbose;
       CLUqueryEnd();
       memEndModule();
       return;
    };
    CLUqueryEnd();
    INFO("Backup canceled.\n");
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
    return;
 }

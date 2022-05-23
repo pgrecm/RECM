@@ -21,33 +21,27 @@
 /*            /description=<STRING>  Change Cluster description                   */
 /*            /full=<RETENTION>      Cluster ID to modify                         */
 /*            /ip=<STRING>           Change Cluster IP                            */
-/*            /maxfiles=<CID>        Change backup piece file limit count         */
-/*            /maxsize=<CID>         Change backup piece size limit               */
+/*            /maxfiles=<N>          Change backup piece file limit count         */
+/*            /maxsize=<N>           Change backup piece size limit               */
 /*            /meta=<RETENTION>      Change METADATA backup retention             */
 /*            /pwd=<CID>             Change Password of user to connect to cluster*/
-/*            /port=<CID>            Change Cluster's port to connect             */
-/*            /repopts=<CID>         Change repliation options                    */
-/*            /reppwd=<CID>          Change repliation user's password            */
-/*            /repusr=<CID>          Change repliation user                       */
-/*            /usr=<CID>             Change user to connect to cluster            */
-/*            /waldir=<CID>          Change WAL backup directory                  */
+/*            /port=<N>              Change Cluster's port to connect             */
+/*            /repopts=<STRING>      Change repliation options                    */
+/*            /reppwd=<STRING>       Change repliation user's password            */
+/*            /repusr=<STRING>       Change repliation user                       */
+/*            /usr=<STRING>          Change user to connect to cluster            */
+/*            /waldir=<PATH>         Change WAL backup directory                  */
+/*            /maxwalfiles=<N>       Change backup piece file limit count for WAL */
+/*            /maxwalsize=<N>        Change backup piece size limit       for WAL */
 /**********************************************************************************/
 void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
 {
    int cluster_is_local=true;
-   if (DEPOisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
+   if (DEPOisConnected(true) == false) return;
    
    memBeginModule();
    
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
    
    int cluster_id;
    if (varExist(GVAR_CLUCID) == true && strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0) cluster_id=varGetInt(GVAR_CLUCID);
@@ -246,7 +240,24 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
       strcat(query,qry_state);
       virgule=',';
    }
-
+   // option 'maxwalfiles'
+   if (qualifierIsUNSET("qal_maxwalfiles") == false)                               // modify cluster/maxfiles=<count>
+   {
+      TRACE("set MAXWALFILES='%s'\n",varGet("qal_maxwalfiles"));
+      varAdd(GVAR_CLUBACKUP_MAXWALFILES,varGet("qal_maxwalfiles"));  
+      sprintf(qry_state,"%c opt_maxwfiles=%ld",virgule,varGetLong("qal_maxwalfiles"));
+      strcat(query,qry_state);
+      virgule=',';
+   }
+   // option 'maxwalsize'
+   if (qualifierIsUNSET("qal_maxwalsize") == false)                                // modify cluster/maxsize=nM|G
+   {
+      TRACE("set MAXWALSIZE='%s'\n",varGet("qal_maxwalsize"));
+      varAdd(GVAR_CLUBACKUP_MAXWALSIZE,varGet("qal_maxwalsize"));  
+      sprintf(qry_state,"%c opt_maxwsize='%s'",virgule,varGet("qal_maxwalsize"));
+      strcat(query,qry_state);
+      virgule=',';
+   };
    // option 'concurrently' from version 12
    if (qualifierIsUNSET("qal_concurrently") == false)                           // modify cluster/concurrently=yes|no
    {
@@ -399,6 +410,7 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
    {
       strcat(query,qry_where);
       int row=DEPOquery(query,0);
+      TRACE("[rc=%d]\n",row);
       if (DEPOrowCount() == 0)
       {
          ERROR(ERR_BACKUPNOTFND,"Cluster '%s' not found in DEPOSIT.\n",cluster_name);
@@ -419,7 +431,6 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
       INFO("Cluster '%s' changed.\n",cluster_name);
    }
    memEndModule();
-   globalArgs.verbosity=saved_verbose;
    return;
 };
 

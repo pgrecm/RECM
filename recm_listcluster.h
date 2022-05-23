@@ -7,17 +7,10 @@
 /**********************************************************************************/
 void COMMAND_LISTCLUSTER(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
+   if (DEPOisConnected(true) == false) return;
 
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-   
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+
    char *query=malloc(1024);
 
 //   if (strcmp(varGet("opt_available"), VAR_UNSET_VALUE) != 0) { strcpy(qry_sts," and b.bcksts=0"); };

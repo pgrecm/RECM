@@ -11,13 +11,10 @@ void COMMAND_DELETERP(int idcmd,char *command_line)
 {
    if (isConnectedAndRegistered() == false) return;
    
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    if (qualifierIsUNSET("qal_name") == true)
-   { 
+   {
       ERROR(ERR_MISQUALVAL,"Missing /name=xxx qualifier.\n");
       return;
    };
@@ -32,7 +29,6 @@ void COMMAND_DELETERP(int idcmd,char *command_line)
                  varGet(GVAR_DEPUSER),
                  varGet(GVAR_CLUCID),
                  varGet("qal_name"));
-   TRACE("DELETE:%s\n",query);
    int row=DEPOquery(query,0);
    if (row != 0)
    {
@@ -43,8 +39,5 @@ void COMMAND_DELETERP(int idcmd,char *command_line)
    }
    DEPOqueryEnd();
    memEndModule();
-   globalArgs.verbosity=saved_verbose;
    return;
 };
-
-   

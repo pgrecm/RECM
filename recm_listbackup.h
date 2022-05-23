@@ -26,12 +26,9 @@
 /**********************************************************************************/
 void COMMAND_LISTBACKUP(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   if ((CLUisConnected() == false) && 
+   if (DEPOisConnected(true) == false) return; 
+
+   if ((CLUisConnected(false) == false) && 
         qualifierIsUNSET("qal_source") == true && 
         qualifierIsUNSET("qal_cid") == true)
    {
@@ -40,15 +37,13 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
    };
 
    memBeginModule();
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    long cluster_id;
    char *cluster_name=memAlloc(128); 
 
-   if (CLUisConnected() == true)
+   if (CLUisConnected(false) == true)
    {
       if (strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0)  cluster_id=varGetLong(GVAR_CLUCID);
       if (strcmp(varGet(GVAR_CLUNAME),VAR_UNSET_VALUE) != 0) strcpy(cluster_name,varGet(GVAR_CLUNAME));
@@ -87,7 +82,7 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
       strcpy(cluster_name,varGet("qal_source"));
       varAdd("qal_cid",QAL_UNSET);                                                                                                 // Take care to not try to use /CID after /SOURCE
    }
-   if (qualifierIsUNSET("qal_cid") == false)
+   if (qualifierIsUNSET("qal_cid") == false)                                                                                       // Backup from a different cluster
    {
       sprintf(query,"select count(*) from %s.clusters where cid=%s",
                     varGet(GVAR_DEPUSER),
@@ -110,8 +105,8 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
       DEPOqueryEnd();
    };
    
-   if (IsClusterEnabled(cluster_id) == false)
-   {
+   if (IsClusterEnabled(cluster_id) == false)                                                                                      // If cluster is disable, 
+   {                                                                                                                               // we jsut display a warning.
       WARN(WRN_CLUDISABLED,"Cluster '%s' is 'DISABLED'.\n",cluster_name);
    }
    
@@ -128,7 +123,7 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
                  "       pgdata,pgversion,timeline,options,bcksize,pcount,"
                  "       coalesce(to_char(bdate,'%s'),'0000-00-00 00:00:00'),coalesce(bwall,''),coalesce(bwalf,''),"
                  "       coalesce(to_char(edate,'%s'),'0000-00-00 00:00:00'),coalesce(ewall,''),coalesce(ewalf,''),"
-                 "       trunc(coalesce(EXTRACT(EPOCH FROM (edate - bdate)),0)) from %s.backups  where cid=%ld",
+                 "       trunc(coalesce(EXTRACT(EPOCH FROM (edate - bdate)),0)),bckdir from %s.backups  where cid=%ld",
                   varGet(GVAR_CLUDATE_FORMAT),
                   varGet(GVAR_CLUDATE_FORMAT),
                   varGet(GVAR_DEPUSER),
@@ -187,6 +182,7 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
    char *f_edate=memAlloc(60);
    char *f_ewall=memAlloc(60);
    char *f_ewalf=memAlloc(60);
+   char *f_bckdir=memAlloc(1024);
    long f_elaps=0;
    
    long bck_full=0;
@@ -222,6 +218,7 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
       strcpy(f_edate,       DEPOgetString(n,15));
       strcpy(f_ewall,       DEPOgetString(n,16));
       strcpy(f_ewalf,       DEPOgetString(n,17));
+      strcpy(f_bckdir,      DEPOgetString(n,18));
       f_elaps=DEPOgetLong(n,18);
       if (strcmp(f_bcktyp,RECM_BCKTYP_FULL) == 0) { bck_full++; };
       if (strcmp(f_bcktyp,RECM_BCKTYP_WAL)  == 0) { bck_wal++; };
@@ -266,20 +263,6 @@ void COMMAND_LISTBACKUP(int idcmd,char *command_line)
       };
    }
    DEPOqueryEnd();
-   
-/*
-if (globalArgs.verbosity == true)
-   {
-      printf("Statistics\n");
-      printf(" Backup:      FULL=%-6ld        WAL=%-6ld   CONFIG=%ld  META=%ld\n",bck_full,bck_wal,bck_cfg,bck_meta);
-      printf(" State:  AVAILABLE=%-6ld INCOMPLETE=%-6ld OBSOLETE=%ld\n",bck_stat_available, bck_stat_incomplete,bck_stat_obsolete);
-      printf("           RUNNING=%-6ld     FAILED=%-6ld\n",bck_stat_running,bck_stat_failed);
-   }
-*/
-
    varAdd("qal_source",VAR_UNSET_VALUE);
-
    memEndModule();
-   // Restore verbosity
-   globalArgs.verbosity=saved_verbose;
 }

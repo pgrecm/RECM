@@ -21,24 +21,14 @@
 // register files  /verbose,/full,/wal,/cfg,/meta,",   "/directory=S,/cid=N,"
 void COMMAND_REGFILES(int idCmd,char *kw)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   if (CLUisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      return;
-   };
-
+   if (DEPOisConnected(true) == false) return;
+   if (CLUisConnected(true) == false) return;
+//   zip_t *zipHandle;
+   
    memBeginModule();
    
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+   
    char *directory_source=memAlloc(1024);
    
    if (qualifierIsUNSET("qal_directory") == false)                              // Specific directory ?
@@ -91,7 +81,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
    // Start scanning directory
    DIR *dp;
    struct dirent *ep;
-   struct stat st;
+   //struct stat st;
 
    VERBOSE("Scanning directory '%s'\n",directory_source);
    dp = opendir (directory_source);
@@ -189,9 +179,9 @@ void COMMAND_REGFILES(int idCmd,char *kw)
                while (lastSlash[0] != 0x00 && lastSlash[0] != '/') { lastSlash--; };
                if (lastSlash[0] == '/') { lastSlash++; strcpy(fileNameOnly,lastSlash); } 
                                    else { strcpy(fileNameOnly,fnd_rf->filename); };
-               int rc=RECMopenRead(fnd_rf->filename);
-               if (rc == false) { rf->processed=flagSetOption(rf->processed,RECMFILE_VERIFY_PROCESSED); continue; };
-               long entries=RECMGetEntries(fnd_rf->filename);
+               RECMDataFile *hDF=RECMopenRead(fnd_rf->filename);
+               if (hDF == NULL) { rf->processed=flagSetOption(rf->processed,RECMFILE_VERIFY_PROCESSED); continue; };
+               long entries=RECMGetEntries2(hDF);
 
                // Check if record already exist ?
                sprintf(query,"select count(*) from %s.backup_pieces where cid=%s and bck_id='%s' and pcid=%d",
@@ -225,7 +215,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
                   int i=0;
                   while( i < entries) 
                   {
-                     if (zip_stat_index(zipHandle, i, 0, &sb) == 0) 
+                     if (zip_stat_index(hDF->zipHandle, i, 0, &sb) == 0) 
                      {
                         char *pwal=strchr(sb.name,'/');
                         if (pwal != NULL) { pwal++;} else { pwal=(char *)&sb.name; };
@@ -261,7 +251,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
                      i++;
                   }
                };
-               RECMcloseRead();
+               RECMcloseRead(hDF);
                tot_size+=fnd_rf->zipsize;
                tot_pieces++;
             }

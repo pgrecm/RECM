@@ -5,18 +5,22 @@ void RECMfileCheck_WALL(const char *bck_id,const char *recm_file)
    RecmFile *rf=RECMGetProperties(recm_file);
    if (rf == NULL) return;
    
-   if (RECMopenRead(recm_file) == false) return;
+   //zip_t *zipHandle;
+   RECMDataFile *hDF=RECMopenRead(recm_file);
+   if (hDF == NULL) return;
+
+   char *query=malloc(1024);
 
    struct zip_stat sb;
-   struct zip_file *zf;
+   //struct zip_file *zf;
    int i=0;
-   long entries=RECMGetEntriesRead();
+   long entries=RECMGetEntriesRead(hDF);
    TRACE("entries in ZIP : %ld\n",entries);
    while( i < entries)
    {  
-      if (zip_stat_index(zipHandle, i, 0, &sb) == 0) 
+      if (zip_stat_index(hDF->zipHandle, i, 0, &sb) == 0) 
       {
-         RecmFileItemProperties *rip=RECMGetFileProperties(i);
+         //RecmFileItemProperties *rip=RECMGetFileProperties(&zipHandle,i);
          char *x=strstr(sb.name,"./");
          if (x != NULL) { x+=2; } else { x=(char *)&sb.name; }
          char *nn=x; 
@@ -24,7 +28,6 @@ void RECMfileCheck_WALL(const char *bck_id,const char *recm_file)
          nn--;
 
          //VERBOSE("Checking WAL file '%s'\n",x);
-         char *query=malloc(1024);
          sprintf(query,"select count(*) from %s.backup_wals where cid=%s and bck_id='%s' and walfile='%s'",
                        varGet(GVAR_DEPUSER),
                        varGet(GVAR_CLUCID),
@@ -33,9 +36,9 @@ void RECMfileCheck_WALL(const char *bck_id,const char *recm_file)
          
          int rc=DEPOquery(query,0);
          int rec_is_present=DEPOgetInt(0,0);
+         TRACE("Bakup UID '%s' : backup wals count=%d [rc=%d]\n",bck_id,rec_is_present,rc);
          //printf("Checking WAL:%s\nrec_is_present=%d\n\n",query,rec_is_present);
          DEPOqueryEnd();
-         free(query);
          if (rec_is_present == 0)
          {
             sprintf(query,"insert into %s.backup_wals (cid,bck_id,walfile,ondisk,bckcount,edate)"
@@ -48,27 +51,27 @@ void RECMfileCheck_WALL(const char *bck_id,const char *recm_file)
             //printf("Checking WAL:%s\n",query);
             int rc=DEPOquery(query,0);
             VERBOSE("Remembering WAL file '%s'\n",x);
+            TRACE("Remembering WAL file '%s' [rc=%d]\n",x,rc);
             DEPOqueryEnd();
          }
       }
       i++;
    };
-   RECMcloseRead();
+   free(query);
+   RECMcloseRead(hDF);
 };
 
 
 
-void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
+void COMMAND_VERIFYBACKUP(int idcmd,char *command_line)
 {
    if (isConnectedAndRegistered() == false) return;
    
    memBeginModule();
 
    INFO("Verifying backups of cluster '%s'\n",varGet(GVAR_CLUNAME));
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    char *qry_before=memAlloc(128); qry_before[0]=0x00; 
    char *qry_after=memAlloc(128);  qry_after[0]=0x00; 
@@ -95,7 +98,7 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
    char *backup_location=memAlloc(1024);
    long backup_options;
    
-   sprintf(query,"select bck_id,bcksts,bdate,bcktyp,bckdir,options from %s.backups where CID=%s",
+   sprintf(query,"select bck_id,bcksts,bdate,bcktyp,bckdir,options,pcount from %s.backups where CID=%s",
                  varGet(GVAR_DEPUSER),
                  varGet(GVAR_CLUCID));
    strcat(query,qry_before);
@@ -118,6 +121,7 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
       strcpy(backup_type,      DEPOgetString(i,3));
       strcpy(backup_location,  DEPOgetString(i,4));
       backup_options=DEPOgetLong(i,5);
+      int number_of_pieces=DEPOgetInt(i,6);
       TRACE("backup_location=%s\n",backup_location);
       if (directory_exist(backup_location) == false) 
       {
@@ -131,7 +135,6 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                      varGet(GVAR_DEPUSER),
                      varGet(GVAR_CLUCID),
                      backup_id);
-      TRACE("sub-query=%s\n",subqry);
       int rowsq = DEPOquery(subqry,1);
       if (rowsq ==0) backup_is_complete=false;                                  // Will be marked as incomplet if there is no piece !
       int j=0;
@@ -146,12 +149,27 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
          }
          else
          {
-            VERBOSE("Backup '%s'. piece '%s' present.\n",backup_id,backup_piece_name);
+            // Check if file is corrupted or not 
+            long entries=0;
+            RECMDataFile *hDF=RECMopenRead(backup_piece_name);
+            if (hDF == NULL)
+            {
+               backup_is_complete=false; 
+            }
+            else
+            {
+               entries=RECMGetEntriesRead(hDF);
+               int rcc=RECMcloseRead(hDF);
+               if (entries == -1 || rcc == false) backup_is_complete=false;
+            }
+            if (backup_is_complete == true) VERBOSE("Backup '%s'. piece '%s' present [%ld object(s)]\n",backup_id,backup_piece_name,entries);
          };
          TRACE("backup_piece '%s' (%s) complete=%d\n",backup_piece_id,backup_piece_name,backup_is_complete);
          j++;
       }
       DEPOqueryEnd();
+      TRACE("rows=%d number_of_pieces=%d\n",rowsq,number_of_pieces);
+      if (rowsq != number_of_pieces) { backup_is_complete=false; };
       if (backup_is_complete == true)
       {
          sprintf(query,"update %s.backups set bcksts=%d where cid=%s and bck_id='%s'",
@@ -160,6 +178,7 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                        varGet(GVAR_CLUCID),
                        backup_id);
          int rc=DEPOquery(query,0);
+         TRACE("updated %ld rows (available backups)[rc=%d]\n",DEPOrowCount(),rc);
          changed_available+=DEPOrowCount();
          DEPOqueryEnd();
          
@@ -179,6 +198,7 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                        backup_id);
          int rc=DEPOquery(query,0);
          changed_incomplete+=DEPOrowCount();
+         TRACE("Update backup UID '%s' (INCOMPLETE) [rc=%d]\n",backup_id,rc);
          DEPOqueryEnd();
          if ((backup_options & BACKUP_OPTION_KEEPFOREVER) == BACKUP_OPTION_KEEPFOREVER)
          {
@@ -189,7 +209,6 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
    DEPOqueryEnd();
    // Now, update all available backups to become obsolete
    //  Verify with '/DAYS=n' option
-   int can_do=0;
    // FULL and WAL backups
    //Retention Mode 'DAY'
    if (retentionMode(varGet(GVAR_CLURETENTION_FULL)) == RETENTION_MODE_DAYS)
@@ -209,10 +228,10 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                      varGet(GVAR_CLUCID),
                      varGet(GVAR_DEPUSER),
                      varGet(GVAR_CLUCID));
-      TRACE("update mode DAYS:%s\n",query);
       int rc=DEPOquery(query,1);
+      TRACE("Update backups (OBSOLETE) [rc=%d]\n",rc);
       changed_obsolete+=DEPOrowCount();
-      TRACE("updated %ld rows (DAY mode)\n",DEPOrowCount());
+      TRACE("updated %ld rows (DAY mode:OBSOLETE backups)[rc=%d]\n",DEPOrowCount(),rc);
       DEPOqueryEnd();             
    }
    else
@@ -235,9 +254,8 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                     varGet(GVAR_CLUCID),
                     varGet(GVAR_DEPUSER),
                     varGet(GVAR_CLUCID));
-      TRACE("update mode COUNT:%s\n",query);
       int rc=DEPOquery(query,1);
-      TRACE("updated %ld rows (FULL mode)\n",DEPOrowCount());
+      TRACE("FULL/WAL updated %ld rows (COUNT mode:OBSOLETE backups)[rc=%d]\n",DEPOrowCount(),rc);
       changed_obsolete=DEPOrowCount();
       DEPOqueryEnd();
    }
@@ -255,10 +273,9 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                      varGet(GVAR_CLUCID),
                      retentionCount(varGet(GVAR_CLURETENTION_CONFIG))
                      );
-      TRACE("update:%s\n",query);
       int rc=DEPOquery(query,1);
       changed_obsolete+=DEPOrowCount();
-      TRACE("updated %ld rows (DAY mode)\n",DEPOrowCount());
+      TRACE("CFG updated %ld rows (DAY mode:OBSOLETE backups)[rc=%d]\n",DEPOrowCount(),rc);
       DEPOqueryEnd();
    }
    else
@@ -277,9 +294,8 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                     retentionCount(varGet(GVAR_CLURETENTION_CONFIG)), // 4
                     varGet(GVAR_DEPUSER),
                     varGet(GVAR_CLUCID));      
-      TRACE("update:%s\n",query);
       int rc=DEPOquery(query,1);
-      TRACE("updated %ld rows (FULL mode)\n",DEPOrowCount());
+      TRACE("CFG updated %ld rows (COUT mode:OBSOLETE backups)[rc=%d]\n",DEPOrowCount(),rc);
       changed_obsolete=DEPOrowCount();
       DEPOqueryEnd();
    }
@@ -297,10 +313,9 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                      varGet(GVAR_CLUCID),
                      retentionCount(varGet(GVAR_CLURETENTION_META))
                      );
-      TRACE("update:%s\n",query);
       int rc=DEPOquery(query,1);
       changed_obsolete+=DEPOrowCount();
-      TRACE("updated %ld rows (DAY mode)\n",DEPOrowCount());
+      TRACE("META updated %ld rows (DAY mode:OBSOLETE backups)[rc=%d]\n",DEPOrowCount(),rc);
       DEPOqueryEnd();
    }
    else
@@ -319,76 +334,76 @@ void COMMAND_VERIFYBACKUP(int idcmd,const char *command_line)
                     retentionCount(varGet(GVAR_CLURETENTION_META)), // 4
                     varGet(GVAR_DEPUSER),
                     varGet(GVAR_CLUCID));       
-      TRACE("update:%s\n",query);
       int rc=DEPOquery(query,1);
-      TRACE("updated %ld rows (FULL mode)\n",DEPOrowCount());
+      TRACE("META updated %ld rows (COUNT mode:OBSOLETE backups)[rc=%d]\n",DEPOrowCount(),rc);
       changed_obsolete=DEPOrowCount();
       DEPOqueryEnd();
    }
    // Looking for WAL GAP now
    sprintf(query,"select w.bck_id,w.walfile,b.bcksts"
               " from %s.backup_wals w,%s.backups b where w.cid=b.cid and w.cid=%s and w.bck_id=b.bck_id and b.bcksts<2"
-              " and w.walfile not like '%s' and w.walfile not like '%s' order by w.walfile",
+              " and w.walfile not like '%s' and w.walfile not like '%s' and w.walfile not like '%s' order by w.walfile",
                  varGet(GVAR_DEPUSER),
                  varGet(GVAR_DEPUSER),
                  varGet(GVAR_CLUCID),
-                 "%backup%","%history%");
+                 "%backup","%history","%partial");
 
-   INFO("Verifying WAL sequence\n");
-   TRACE("query:=%s\n",query);
-   int wal_rows=DEPOquery(query,1);
-   char *prev_bckid=memAlloc(30);
-   char *bckid=memAlloc(30);
-   prev_bckid[0]=0x00;
-   bckid[0]=0x00;
-   
-   char *curWAL=NULL;
-   char *prvWAL=memAlloc(64);prvWAL[0]=0x00;
-   char *cw    =memAlloc(64);    cw[0]=0x00;
-   for (int i=0;i < wal_rows;i++)
+   // If 'verify /uid=xxx is used, we don't check WAL sequence
+   if (qualifierIsUNSET("qal_uid") == true)
    {
-      strcpy(prev_bckid,bckid);
-      strcpy(bckid,DEPOgetString(i,0));
-      if (curWAL != NULL && strstr(curWAL,"backup") == NULL) { strcpy(prvWAL,curWAL); };
-      strcpy(cw,DEPOgetString(i,1));
-      curWAL=cw;
-      if (curWAL[0] == '.') cw++;
-      if (curWAL[0] == '/') cw++;
-      char *remove_ext=strstr(curWAL,".");
-      if (remove_ext != NULL) remove_ext[0]=0x00;
-      int bcksts=DEPOgetInt(i,2);
-      int prvWAL_valid=1;
-      if (strstr(prvWAL,"backup")  != NULL) prvWAL_valid=0;
-      if (strstr(prvWAL,"history") != NULL) prvWAL_valid=0;
+      INFO("Verifying WAL sequence\n");
+      int wal_rows=DEPOquery(query,1);
+      char *prev_bckid=memAlloc(30);
+      char *bckid=memAlloc(30);
+      prev_bckid[0]=0x00;
+      bckid[0]=0x00;
       
-      int curWAL_valid=1;
-      if (strstr(curWAL,"backup")  != NULL) curWAL_valid=0;
-      if (strstr(curWAL,"history") != NULL) curWAL_valid=0;
-      TRACE("Current WAL='%s'\n",curWAL);
-      long cTL=getWALtimeline(prvWAL);
-      long nTL=getWALtimeline(curWAL);
-      if (i > 0 && curWAL_valid == 1 && prvWAL_valid == 1 && strcmp(curWAL,ComputeNextWAL(prvWAL)) != 0 && strcmp(prvWAL,curWAL) != 0)
+      char *curWAL=NULL;
+      char *prvWAL=memAlloc(64);prvWAL[0]=0x00;
+      char *cw    =memAlloc(64);    cw[0]=0x00;
+      for (int i=0;i < wal_rows;i++)
       {
-         if (nTL != cTL)
+         strcpy(prev_bckid,bckid);
+         strcpy(bckid,DEPOgetString(i,0));
+         if (curWAL != NULL && strstr(curWAL,"backup") == NULL) { strcpy(prvWAL,curWAL); };
+         strcpy(cw,DEPOgetString(i,1));
+         curWAL=cw;
+         if (curWAL[0] == '.') cw++;
+         if (curWAL[0] == '/') cw++;
+         char *remove_ext=strstr(curWAL,".");
+         if (remove_ext != NULL) remove_ext[0]=0x00;
+         int bcksts=DEPOgetInt(i,2);
+         int prvWAL_valid=1;
+         if (strstr(prvWAL,"backup")  != NULL) prvWAL_valid=0;
+         if (strstr(prvWAL,"history") != NULL) prvWAL_valid=0;
+         
+         int curWAL_valid=1;
+         if (strstr(curWAL,"backup")  != NULL) curWAL_valid=0;
+         if (strstr(curWAL,"history") != NULL) curWAL_valid=0;
+         TRACE("Current WAL='%s'\n",curWAL);
+         long cTL=getWALtimeline(prvWAL);
+         long nTL=getWALtimeline(curWAL);
+         if (i > 0 && curWAL_valid == 1 && prvWAL_valid == 1 && strcmp(curWAL,ComputeNextWAL(prvWAL)) != 0 && strcmp(prvWAL,curWAL) != 0)
          {
-            INFO("TIMELINE(TL) change between '%s' and '%s'.\n",prvWAL,curWAL);
-         }
-         else
-         {
-            switch(bcksts)
+            if (nTL != cTL)
             {
-            case RECM_BACKUP_STATE_OBSOLETE : 
-               INFO("GAP between '%s' and '%s'. (OBSOLETE backup).\n",prvWAL,curWAL);break;
-            default:
-               WARN(WRN_GAPFOUND,"GAP between '%s' and '%s'. (AVAILABLE backup). Verify and Launch a FULL backup if necessary.\n",prvWAL,curWAL);
+               INFO("TIMELINE(TL) change between '%s' and '%s'.\n",prvWAL,curWAL);
             }
-         }
-      };
-   }
-   DEPOqueryEnd();
-
+            else
+            {
+               switch(bcksts)
+               {
+               case RECM_BACKUP_STATE_OBSOLETE : 
+                  INFO("GAP between '%s' and '%s'. (OBSOLETE backup).\n",prvWAL,curWAL);break;
+               default:
+                  WARN(WRN_GAPFOUND,"GAP between '%s' and '%s'. (AVAILABLE backup). Verify and Launch a FULL backup if necessary.\n",prvWAL,curWAL);
+               }
+            }
+         };
+      }
+      DEPOqueryEnd();
+   };
    INFO("Backup piece(s) state changed : %d AVAILABLE, %d OBSOLETE, %d INCOMPLETE.\n",changed_available,changed_obsolete,changed_incomplete);
    
-   globalArgs.verbosity=saved_verbose;
    memEndModule();   
 }

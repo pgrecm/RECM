@@ -5,16 +5,9 @@
 /**********************************************************************************/
 void COMMAND_STATCLUSTER(int idcmd,char *command_line)
 {
-   if (CLUisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      return;
-   };
-   if (DEPOisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   };
+   if (CLUisConnected(true) == false) return;
+   if (DEPOisConnected(true) == false) return;
+
    if (varGetLong(GVAR_CLUCID) == 0)
    {
      ERROR(ERR_NOTREGISTERED,"Not registered to any deposit.\n");
@@ -55,11 +48,6 @@ void COMMAND_STATCLUSTER(int idcmd,char *command_line)
    }
    else
    {
-      if (CLUisConnected() == false) 
-      {
-         memEndModule();
-         return;
-      };
       strcpy(cluster_name,varGet(GVAR_CLUNAME));
    }
 
@@ -171,19 +159,31 @@ void COMMAND_STATCLUSTER(int idcmd,char *command_line)
    };
    DEPOqueryEnd();
    
-   
-   sprintf(query,"select to_char(min(bdate),'%s'),to_char(max(bdate),'%s') from %s.backups where cid=%ld and bcksts=0 and bcktyp='FULL'",
-                 varGet(GVAR_CLUDATE_FORMAT),
-                 varGet(GVAR_CLUDATE_FORMAT),
-                 varGet(GVAR_DEPUSER),
-                 cluster_id);
+   sprintf(query,"select coalesce(to_char(lstfull,'%s'),'(never)'),"
+                       " coalesce(to_char(lstwal, '%s'),'(never)'),"
+                       " coalesce(to_char(lstcfg, '%s'),'(never)'),"
+                       " coalesce(to_char(lstmeta,'%s'),'(never)')"
+                       "  from %s.clusters where cid=%ld",
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_DEPUSER),
+                       cluster_id);
    rows=DEPOquery(query,0);
-   if (rows > 0)
-   {
-      printf("   Oldest FULL backup : '%s'\n",DEPOgetString(0,0));
-      printf("     Last FULL backup : '%s'\n",DEPOgetString(0,1));
-   }
+   printf ("\nLast Backups\n");
+   printf("   Last FULL backup   : %s\n",DEPOgetString(0,0));
+   printf("   Last WAL backup    : %s\n",DEPOgetString(0,1));
+   printf("   Last CONFIG backup : %s\n",DEPOgetString(0,2));
+   printf("   Last META backup   : %s\n",DEPOgetString(0,3));
    DEPOqueryEnd();
+   sprintf(query,"select min(coalesce(to_char(bdate,'%s'),'(never)')) from %s.backups where cid=%ld and bcksts=0",
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_DEPUSER),
+                       cluster_id);
+   rows=DEPOquery(query,0);
    
+   printf("   Oldest possible restore at '%s'\n",DEPOgetString(0,0));
+   DEPOqueryEnd();
    memEndModule();
 }
