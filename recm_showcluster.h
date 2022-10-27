@@ -23,18 +23,67 @@
 /*      Available Qualifier(s):                                                   */
 /*         /parameter=<STRING>       List settings of the cluster                 */
 /**********************************************************************************/                                      
+/*
+@command show cluster
+@definition
+Display RECM cluster's properties.
+(See also {&modify cluster&} for more details)
+@option "/backupdir"     "Backup directory"
+@option "/blksize"       "Block size of working memory buffer"
+@option "/cfg"           "Retention for CONFIG backups"
+@option "/compression"   "'-1' to disable. '1'..'9' set the compression level."
+@option "/db"            "Database name to connect to (Default is 'postgres')"
+@option "/date_format"   "Date format (Default is 'YYYY-MM-DD HH24:MI:SS')"
+@option "/delwal"        "Delay of WAL deletion by WAL backup"
+@option "/description"   "Description of the cluster"
+@option "/full"          "Retention for FULL and WAL backups"
+@option "/ip"            "IP of the cluster"
+@option "/maxfiles"      "Maximum files within a FULL backup set"
+@option "/maxwalfiles"   "Maximum files within a WAL backup set"
+@option "/maxsize"       "Maximum size of a backup set"
+@option "/maxwalsize"    "Maximum size of a WAL backup set"
+@option "/meta"          "Retention for METADATA backups"
+@option "/name"          "Cluster name (Correspond to PostgreSQL parameter 'cluster_name'"
+@option "/pwd"           "User's password used to connect to the cluster"
+@option "/pgdata"        ""
+@option "/port"          "Port used to connect to the cluster"
+@option "/repusr"        ""
+@option "/reppwd"        ""
+@option "/repopts"       ""
+@option "/usr"           "User used to connect to the cluster"
+@option "/waldir"        "WAL destination folder"
+@option "/parameter=S"   "Display PostgreSQL cluster's parameter"
+ 
+@example
+@inrecm show cluster /pgdata
+&out PGDATA directory: '/Library/PostgreSQL/12/data'
+@inrecm show cluster /backupdir /waldir
+@out WAL directory: '/Library/PostgreSQL/12/WALfiles/'
+@out Backup directory: '/Volumes/pg_backups/'
+@inrecm show cluster /param=ssl 
+@out ssl='off'
+@out ssl_ca_file=''
+@out ssl_cert_file='server.crt'
+@out ssl_ciphers='HIGH:MEDIUM:+3DES:!aNULL'
+@out ssl_crl_file=''
+@out ssl_dh_params_file=''
+@out ssl_ecdh_curve='prime256v1'
+@out ssl_key_file='server.key'
+@out ssl_library='OpenSSL'
+@out ssl_max_protocol_version=''
+@out ssl_min_protocol_version='TLSv1'
+@out ssl_passphrase_command=''
+@out ssl_passphrase_command_supports_reload='off'
+@out ssl_prefer_server_ciphers='on'
+@inrecm  
+@end
+ 
+*/
 void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
 {
-   if (CLUisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      return;
-   };
-   if (DEPOisConnected() == false)
-      WARN(WRN_NOTDEPOSITCNX,"Not connected to any deposit.\n");
-
-   if (varGetLong(GVAR_CLUCID) == 0)
-      WARN(WRN_NOTREGISTERED,"Not registered to any deposit.\n");
+   if (CLUisConnected(true) == false) return;
+   if (DEPOisConnected(false) == false) WARN(WRN_NOTDEPOSITCNX,"Not connected to any deposit.\n");
+   if (varGetLong(GVAR_CLUCID) == 0)    WARN(WRN_NOTREGISTERED,"Not registered to any deposit.\n");
 
    int id=0;
    if (optionIsSET("opt_blksize")     == true) { printf("Memory buffer size (MB): '%s'\n",          varGet(GVAR_CLUREADBLOCKSIZE)); id++; };
@@ -42,6 +91,8 @@ void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
    if (optionIsSET("opt_delwal")      == true) { printf("Delete WAL after backup(minutes): '%s'\n", varGet(GVAR_CLUAUTODELWAL)); id++; };
    if (optionIsSET("opt_maxsize")     == true) { printf("Backup piece MAX size: '%s'\n",            varGet(GVAR_CLUBACKUP_MAXSIZE)); id++; };
    if (optionIsSET("opt_maxfiles")    == true) { printf("Backup piece MAX files: '%s'\n",           varGet(GVAR_CLUBACKUP_MAXFILES)); id++; };
+   if (optionIsSET("opt_maxwalsize")  == true) { printf("WAL Backup piece MAX size: '%s'\n",        varGet(GVAR_CLUBACKUP_MAXWALSIZE)); id++; };
+   if (optionIsSET("opt_maxwalfiles") == true) { printf("WAL Backup piece MAX files: '%s'\n",       varGet(GVAR_CLUBACKUP_MAXWALFILES)); id++; };
    if (optionIsSET("opt_full")        == true) { printf("Full+WAL backup retention: '%s'\n",        varGet(GVAR_CLURETENTION_FULL)); id++; };
    if (optionIsSET("opt_cfg")         == true) { printf("Config backup retention: '%s'\n",          varGet(GVAR_CLURETENTION_CONFIG)); id++; };
    if (optionIsSET("opt_meta")        == true) { printf("Metadata backup retention: '%s'\n",        varGet(GVAR_CLURETENTION_META)); id++; };
@@ -61,6 +112,38 @@ void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
                                                  printf("Rebuild Index Concurrently: '%s'\n",r);
                                                  id++; 
                                                };
+   if (optionIsSET("opt_repusr") == true) { char *query=malloc(1024);
+                                            sprintf(query,"select rep_usr from %s.clusters where CID=%s",
+                                                          varGet(GVAR_DEPUSER),
+                                                          varGet(GVAR_CLUCID));
+                                            int rows=DEPOquery(query,0);
+                                            printf("replication user: '%s'\n",DEPOgetString(0,0));
+                                            free(query);
+                                            id++;
+                                          };
+   if (optionIsSET("opt_reppwd") == true) { char *query=malloc(1024);
+                                            sprintf(query,"select rep_pwd,clu_addr,rep_opts from %s.clusters where CID=%s",
+                                                          varGet(GVAR_DEPUSER),
+                                                          varGet(GVAR_CLUCID));
+                                            int rows=DEPOquery(query,0);
+                                            printf("replication password: '%s'\n",unscramble(DEPOgetString(0,0)));
+                                            free(query);
+                                            DEPOqueryEnd();
+                                            id++;
+                                          };
+   if (optionIsSET("opt_repopts") == true) { char *query=malloc(1024);
+                                            sprintf(query,"select rep_opts from %s.clusters where CID=%s",
+                                                          varGet(GVAR_DEPUSER),
+                                                          varGet(GVAR_CLUCID));
+                                            int rows=DEPOquery(query,0);
+                                            printf("replication options: '%s'\n",DEPOgetString(0,0));
+                                            free(query);
+                                            DEPOqueryEnd();
+                                            id++;
+                                          };
+                                          
+                                               
+                                               
    if (optionIsSET("opt_ip") == true) { printf("IP address: '%s'\n",                                varGet(GVAR_CLUIP)); id++; }; 
    if (qualifierIsUNSET("qal_parameter") == false)
    {
@@ -85,7 +168,8 @@ void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
    {
       char *query=malloc(1024);
       
-      printf("recm version %s.\n",varGet(RECM_VERSION));
+//      printf("recm version %s.\n",varGet(RECM_VERSION));
+      display_version();
       printf("Cluster parameters:\n");
         printOption("Cluster ID(CID)","",             varGet(GVAR_CLUCID));
         printOption("Cluster Name",   "",             varGet(GVAR_CLUNAME));
@@ -110,6 +194,8 @@ void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
               printOption("Delete WAL after backup(minutes)",      "/delwal",           varGet(GVAR_CLUAUTODELWAL      ));
               printOption("Backup piece MAX size",                 "/maxsize",          varGet(GVAR_CLUBACKUP_MAXSIZE  ));
               printOption("Backup piece MAX files",                "/maxfiles",         varGet(GVAR_CLUBACKUP_MAXFILES ));
+              printOption("WAL Backup piece MAX size",             "/maxwalsize",       varGet(GVAR_CLUBACKUP_MAXWALSIZE  ));
+              printOption("WAL Backup piece MAX files",            "/maxwalfiles",      varGet(GVAR_CLUBACKUP_MAXWALFILES ));
               printOption("Full+WAL backup retention",             "/full",             varGet(GVAR_CLURETENTION_FULL  ));
               printOption("Config backup retention",               "/cfg",              varGet(GVAR_CLURETENTION_CONFIG));
               printOption("Metadata backup retention",             "/meta",             varGet(GVAR_CLURETENTION_META  ));
@@ -133,17 +219,22 @@ void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
       printSection("Deposit");
         printOption("Registered deposit",   "",          varGet(GVAR_REGDEPO));
       
-      if (DEPOisConnected() == true)
+      if (DEPOisConnected(false) == true)
       {
          sprintf(query,"select clu_sts from %s.clusters where CID=%s",
                        varGet(GVAR_DEPUSER),
                        varGet(GVAR_CLUCID));
          rows=DEPOquery(query,0);
          sprintf(query,"select clu_sts,"
-                       "       coalesce(to_char(lstfull, 'DD/MM/YYYY HH24:MI'),to_char(lstfull, 'DD/MM/YYYY HH24:MI'),'(never)'),"
-                       "       coalesce(to_char(lstwal, 'DD/MM/YYYY HH24:MI'),to_char(lstwal, 'DD/MM/YYYY HH24:MI'),'(never)'),"
-                       "       coalesce(to_char(lstcfg, 'DD/MM/YYYY HH24:MI'),to_char(lstcfg, 'DD/MM/YYYY HH24:MI'),'(never)')"
+                       "       coalesce(to_char(lstfull,'%s'),'(never)'),"
+                       "       coalesce(to_char(lstwal, '%s'),'(never)'),"
+                       "       coalesce(to_char(lstcfg, '%s'),'(never)'),"
+                       "       coalesce(to_char(lstmeta,'%s'),'(never)')"
                        "  from %s.clusters where CID=%s",
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_CLUDATE_FORMAT),
+                       varGet(GVAR_CLUDATE_FORMAT),
                        varGet(GVAR_DEPUSER),
                        varGet(GVAR_CLUCID));
          rows=DEPOquery(query,0);
@@ -151,6 +242,7 @@ void COMMAND_SHOWCLUSTER(int idcmd,char *command_line)
          printOption("Last FULL backup",  "",DEPOgetString(0,1));
          printOption("Last WAL backup",   "",DEPOgetString(0,2));
          printOption("Last CONFIG backup","",DEPOgetString(0,3));
+         printOption("Last META backup","",  DEPOgetString(0,4));
          printf("\nTo modify configuration, use qualifier enclosed in parentheses\n");
          printf("Example:\n");
          printf("\tRECM> modify cluster /waldir=\"<my_folder>\"\n");

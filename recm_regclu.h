@@ -1,7 +1,7 @@
 /**********************************************************************************/
 /* REGISTER CLUSTER command                                                       */
 /* Usage:                                                                         */
-/*      list wal                                                                  */
+/*      register cluster                                                                  */
 /*      options:                                                                  */
 /*            /force          Force registration again                            */
 /*      Qualifiers:                                                               */
@@ -12,13 +12,30 @@
 /* - 3 - Configuration parameter 'cluster_name' must be set.                      */
 /*                                                                                */
 /**********************************************************************************/
+/*
+@command register cluster
+@definition
+Register a PostgreSQL cluster into the deposit.
+If you recreate the deposit, youmay have to register each cluster to the deposit.
+The option '/cid' allow you to register each cluster exactly with the same ID that it was having. 
+This could be very usefull to register with the same ID, to register old backups.
+'/force' and '/cid' are mutually exclusive.
+
+@option "/force"   "Force registration, even if the cluster was already registered."
+@option "/cid=CID" "Force the cluster ID to have a specific ID"
+ 
+@example
+@inrecm register cluster /force /cid=1 
+@out recm-err(2804): You cannot use '/cid' with '/force'.
+@inrecm register cluster /cid=1 
+@out recm-err(b04): Cluster 'CLU12' already registered. Us option '/force' to register again.
+@inrecm
+@end
+ 
+*/
 void COMMAND_REGCLUSTER(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"You must be connected to a DEPOSIT.\n");
-      return;
-   };
+   if (DEPOisConnected(true) == false) return;
 
    memBeginModule();
    char *query=memAlloc(1024);

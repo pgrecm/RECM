@@ -15,18 +15,46 @@
 /*            /uid=<UID>      UID of the backup to change                         */
 /*            /tag=<STRING>   Change TAG of a backup                              */
 /**********************************************************************************/
+/*
+@command modify backup
+@definition
+Modify a backup. You can change the status, the TAG of abackup.
+You can also exclude the backup from the retention plicy (/lock).
+
+@option "/available"      "Change status to 'available'"       
+@option "/incomplete"     "Change status to 'incomplete'"      
+@option "/obsolete"       "Change status to 'oboslete'"        
+@option "/lock            "disable retention policy"           
+@option "/unlock"         "enable retention policy"                                             
+@option "/before=DATE"    "list WALs before a date"            
+@option "/after=DATE"     "list WALs after a date"             
+@option "/cid=CID"        "Modify a backup of an other cluster"
+@option "/uid=UID"        "UID of the backup to change"        
+@option "/tag=STRING"     "Change TAG of a backup"             
+
+@example
+@inrecm modify backup/uid=0001634be3052e3329e8/tag="Must_keep_this" 
+@out recm-inf: Backup UID '0001634be3052e3329e8' changed.
+@inrecm list backup/wal 
+@out List backups of cluster 'CLU12' (CID=1)
+@out UID                    Date                 Type   Status       TL          Size  Tag
+@out ---------------------- -------------------- ------ ------------ ----   ---------- -------------------------
+@out 000163487668106933d0   2022-10-13 22:34:48  WAL    AVAILABLE    36         112 MB 20221013_CLU12_WAL
+@out 0001634876943425da80   2022-10-13 22:35:32  WAL    AVAILABLE    36          32 MB 20221013_CLU12_WAL
+@out 00016349a620316c7358   2022-10-14 20:10:40  WAL    AVAILABLE    36         208 MB 20221014_CLU12_WAL
+@out 00016349a65c0f23fa00   2022-10-14 20:11:40  WAL    AVAILABLE    36          32 MB 20221014_CLU12_FULL
+@out 00016349b08533b7e228   2022-10-14 20:55:01  WAL    AVAILABLE    36          64 MB WAL_cron1
+@out 0001634be2931ec906f8   2022-10-16 12:53:07  WAL    AVAILABLE    36          48 MB 20221016_CLU12_FULL
+@out 0001634be3052e3329e8   2022-10-16 12:55:01  WAL    AVAILABLE    36          16 MB Must_keep_this
+@inrecm
+@end
+*/
 void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (DEPOisConnected(true) == false) return;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+
    memBeginModule();
 
    int cluster_id;
@@ -45,7 +73,6 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
       {
          ERROR(ERR_BADCLUNAME,"Unknown cluster ID '%s'\n",varGet("qal_cid"));
          DEPOqueryEnd();
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
@@ -55,7 +82,11 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
    }
    else
    {
-      if (CLUisConnected() == false) return;
+      if (CLUisConnected(true) == false) 
+      {
+         memEndModule();
+         return;
+      }
       strcpy(cluster_name,varGet(GVAR_CLUNAME));
       cluster_id=varGetInt(GVAR_CLUCID);
    }
@@ -127,6 +158,7 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
          strcat(query,qry_state);
          strcat(query,qry_where);
          int row=DEPOquery(query,0);
+         TRACE("[rc=%d]\n",row);
          if (DEPOrowCount() == 0) { ERROR(ERR_BACKUPNOTFND,"Backup UID '%s' not found in DEPOSIT.\n",UID); }
                              else { INFO("Backup UID '%s' changed.\n",UID); };
          DEPOqueryEnd();
@@ -135,7 +167,6 @@ void COMMAND_MODIFYBACKUP(int idcmd,char *command_line)
       UID++;
       comma=strchr(UID,',');           // Reach next delimiter
    }
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
    return;
 };

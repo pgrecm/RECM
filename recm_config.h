@@ -1,12 +1,16 @@
+/*
+@nodoc exlude this module from html generator
+
+*/
 
 
 #define ERR_SECNOTFND  1
 #define ERR_SECLOADED  0
-#define LOCK_CFGFILE "/tmp/.recmlckupdate"
+#define LOCK_CFGFILE ".recmlckupdate"
 
 /********************************************************************************/
 /* Construct configuration file '<home>/.recm/recm_<cluster_name>.conf'         */
-/* You can define the environment variable 'ENVIRONMENT_RECM_CONFIG'            */
+/* You can define the environment variable 'RECM_CONFIG'                        */
 /* In that case, you have to define the full file name                          */
 /* Example :                                                                    */
 /*           export RECM_CONFIG='/var/lib/recm/recm.conf'                       */
@@ -75,29 +79,56 @@ void writeSection(FILE *Hw,const char * prefix,const char * sectionName,int with
 void lock_configFile()
 {
    TRACE("Wait for lock...\n");
+   char *lock_file=malloc(1024);
+   int localAlloc=0;
+#if defined __APPLE__   
+   char* pTMP=getenv ("TMPDIR");                                                                                 // Change configuration file location using 'RECM_CONFIG'
+#else
+  char* pTMP=getenv ("TMP");
+   if (pTMP == NULL) pTMP=getenv ("TEMP");
+#endif
+   if (pTMP == NULL) { localAlloc++;pTMP=strdup("/tmp"); };
+   sprintf(lock_file,"%s/%s",pTMP,LOCK_CFGFILE);
+   TRACE("Lock file is '%s'...\n",lock_file);
    int wait_10=10;
-   while (file_exists(LOCK_CFGFILE) == true && wait_10 > 0)
+   while (file_exists(lock_file) == true && wait_10 > 0)
    {
       TRACE("Is still locked (%d)...\n",wait_10);
       sleep(1);
       wait_10--;
    }
-   FILE *Hw=fopen(LOCK_CFGFILE, "w");
+   FILE *Hw=fopen(lock_file, "w");
    fprintf(Hw,"--Lock--\n");
    fclose(Hw);
+   if (localAlloc > 0) free(pTMP);
+   free(lock_file);
 }
 
 void unlock_configFile()
 {
-   if (file_exists(LOCK_CFGFILE) == true) 
+   char *lock_file=malloc(1024);
+   int localAlloc=0;
+#if defined __APPLE__   
+   char* pTMP=getenv ("TMPDIR");                                                                                 // Change configuration file location using 'RECM_CONFIG'
+#else
+  char* pTMP=getenv ("TMP");
+   if (pTMP == NULL) pTMP=getenv ("TEMP");
+#endif
+   if (pTMP == NULL) { localAlloc++;pTMP=strdup("/tmp"); };
+   sprintf(lock_file,"%s/%s",pTMP,LOCK_CFGFILE);
+   TRACE("Lock file is '%s'...\n",lock_file);
+
+   if (file_exists(lock_file) == true) 
    {
       TRACE("Unlocked\n");
-      unlink(LOCK_CFGFILE);
+      unlink(lock_file);
    }
    else
    {
       TRACE("Was not locked.\n");
    }
+   if (localAlloc > 0) free(pTMP);
+   free(lock_file);   
 }
 
 void SaveConfigFile(const char *prefix,const char *pSection,int kind)
@@ -123,9 +154,9 @@ void SaveConfigFile(const char *prefix,const char *pSection,int kind)
    FILE *Hw=fopen(configFile, "w");
    if (Hw == NULL) 
    { 
-      free(sectionName);
       free(configBackup);
       free(currentSection);
+      free(sectionName);
       unlock_configFile();
       return;
    };
@@ -156,14 +187,15 @@ void SaveConfigFile(const char *prefix,const char *pSection,int kind)
             }
          }
       }
+      free(line);
       fclose(Hr);
    };
    if (updated == 0) { writeSection(Hw,prefix,pSection,1,kind); }
    fclose(Hw);
    globalArgs.configChanged=0;
-   free(sectionName);
    free(configBackup);
    free(currentSection);
+   free(sectionName);
    unlock_configFile();
    TRACE("END\n");
 }
@@ -188,6 +220,7 @@ int LoadConfigFile(const char *prefix,const char *pSection)
    char* line=malloc(line_size);
    char *keyword=malloc(line_size);
    char *value=malloc(line_size);
+   
    int ln=0;
    while (fgets(line, line_size, fh) != NULL)
    {
@@ -231,6 +264,7 @@ int LoadConfigFile(const char *prefix,const char *pSection)
    free(line);
    free(sectionName);
    free(currentSection);
+
    globalArgs.configChanged=0;
    unlock_configFile();
    return(result);
@@ -240,7 +274,7 @@ int LoadConfigFile(const char *prefix,const char *pSection)
 void DisplaySavedClusters(const char *prefix)
 {
    TRACE("ARGS: prefix='%s'\n",prefix);
-   int result=ERR_SECNOTFND;
+   //int result=ERR_SECNOTFND;
    char *configuration_file=buildConfigurationFile();
    
    lock_configFile();

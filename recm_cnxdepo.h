@@ -8,6 +8,25 @@
 /*         /pwd=<STRING>              Password                                    */
 /*         /db=<STRING>               Database to connect to                      */
 /**********************************************************************************/
+/*
+@command connect deposit
+@definition
+Establish a connection to the RECM deposit.
+
+@option "/verbose"    "Display more details"
+@option "/host=HOST"  "Host name to connect to"
+@option "/port=PORT"  "port number to connect to"
+@option "/usr=USER"   "Username to connect to"
+@option "/pwd=PASSWD" "HUser's password to connect to"
+@option "/db=DBNAME"  "Database name to connect to"
+
+@example
+@inrecm connect deposit
+@out 
+@inrecm
+@end
+*/
+
 void COMMAND_CNXDEPOSIT(int idcmd,char *command_line)
 {
    // We have 2 ways to connect to a  deposit.
@@ -59,11 +78,11 @@ void COMMAND_CNXDEPOSIT(int idcmd,char *command_line)
          return;
       }
       varAdd(GVAR_DEPNAME,DEPOgetString(0,0));
-      if (strcmp(DEPOgetString(0,1),VERSION) != 0)
+      if (strcmp(DEPOgetString(0,1),CURRENT_VERSION) != 0)
       {
-         ERROR(ERR_BADDEPOVER,"Wrong Deposit version. Have %s, expected '%s'\n",
+         ERROR(ERR_BADDEPOVER,"Wrong Deposit version. Have %s, expected '%s'. Invoke Upgrade\n",
                                 DEPOgetString(0,1),
-                                VERSION);
+                                CURRENT_VERSION);
          return;
       }
       DEPOqueryEnd();
@@ -74,7 +93,7 @@ void COMMAND_CNXDEPOSIT(int idcmd,char *command_line)
       INFO("Connected to deposit '%s'\n",varGet(GVAR_DEPNAME));
       
       // now, check if we are already registred ?
-      if (CLUisConnected() == true)
+      if (CLUisConnected(false) == true)
       {
          char *query=malloc(1024);
          sprintf(query,"select count(*) from %s.clusters where clu_nam='%s'",

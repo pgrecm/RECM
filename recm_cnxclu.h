@@ -9,6 +9,25 @@
 /*         /pwd=<STRING>              Password                                    */
 /*         /db=<STRING>               Database to connect to                      */
 /**********************************************************************************/
+/*
+@command connect cluster
+@definition
+Establish a connection to the PostgreSQL server(cluster).
+
+@option "/verbose"    "Display more details"
+@option "/host=HOST"  "Host name to connect to"
+@option "/port=PORT"  "port number to connect to"
+@option "/usr=USER"   "Username to connect to"
+@option "/pwd=PASSWD" "HUser's password to connect to"
+@option "/db=DBNAME"  "Database name to connect to"
+
+@example
+@inrecm connect cluster /usr=postgres /pwd=postgres /db=postgres /port=5432 /host=localhost
+@out recm-inf: Connected to cluster 'CLU12'
+@out CLU12>
+@inrecm
+@end
+*/
 void COMMAND_CNXCLUSTER(int idcmd,char *command_line)
 {
    CLUdisconnect();

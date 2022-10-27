@@ -5,19 +5,36 @@
 /*      Available Option(s):                                                      */
 /*         /verbose                                                               */
 /**********************************************************************************/
+/*
+@command list cluster
+@definition
+Display all registered clusters in current DEPOSIT.
+@option "/verbose" "Display more details"
+
+@example
+@in recm -t CLU12
+@inrecm list cluster 
+@out List of registered clusters
+@out 
+@out CID        State           Name                 IP              Description
+@out ---------- --------------- ---------------      -------------------- ------------------------------
+@out 1          ENABLED         CLU12                192.168.1.62    (null)
+@out CLU12> list cluster /verbose 
+@inrecm List of registered clusters
+@out 
+@out CID        State           Name                 IP                    Full        WAL     Config Description
+@out ---------- --------------- -------------------- --------------- ---------- ---------- ---------- ------------------------------
+@out 1          ENABLED         CLU12                192.168.1.62             7          6          0 (null)
+@inrecm
+@end
+ 
+*/
 void COMMAND_LISTCLUSTER(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
+   if (DEPOisConnected(true) == false) return;
 
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-   
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+
    char *query=malloc(1024);
 
 //   if (strcmp(varGet("opt_available"), VAR_UNSET_VALUE) != 0) { strcpy(qry_sts," and b.bcksts=0"); };

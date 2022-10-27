@@ -12,7 +12,44 @@
 /*         /cid=<STRING>              use a backup from a different cluster       */
 /*         /directory=<PATH>          New PGDATA to create                        */
 /**********************************************************************************/
+/*
+@command register files
+@definition
+When you recreate a new deposit, you can register back all files.  You need to take care of the ID of the cluster (see register cluster for more details).
 
+@option "/verbose"        "Display more details"
+@option "/cid=CID"        "use backup files from a different cluster"
+@option "/directory=path" "Register files from a different location than default."
+@option "/meta"           "Register only METADATA backups"
+@option "/wal"            "Register only WAL backups"    
+@option "/full"           "Register only FULL backups"    
+@option "/cfg"            "Register only CONFIG backups"  
+
+
+ 
+@example
+@inrecm register files /verbose
+@out recm-inf: Scanning directory '/Volumes/pg_backups/'
+@out recm-inf: Skipping file '000263372090393ffd98_5_FULL.recm'. Does not belongs to cluster
+@out recm-inf: Skipping file '0001634876b11ac568a8_13_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '0001633fb26b12be5318_5_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '0001634876b11ac568a8_17_FULL.recm'. Not a RECM file.
+@out recm-inf: Backup UID '00016349b08533b7e228',piece 1 already registered
+@out recm-inf: Skipping file '0001633f1099024bcc90_5_FULL.recm'. Not a RECM file.
+@out recm-inf: Backup UID '00016349a64029e1e4b0',piece 8 already registered
+@out ...
+@out recm-inf: Skipping file '0001633fb26b12be5318_8_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '0001634876b11ac568a8_16_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '0001634875fe2b66ded0_6_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '00026294f81036e68cd8_3_FULL.recm'. Does not belongs to cluster
+@out recm-inf: Skipping file '0001634305bd1d488948_6_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '000163487b3717cb4730_3_FULL.recm'. Not a RECM file.
+@out recm-inf: Skipping file '000862d061a024d184f4_2_FULL.recm'. Does not belongs to cluster
+@out recm-inf: Skipping file '0001633fb26b12be5318_2_FULL.recm'. Not a RECM file.
+@out recm-inf: Backup UID '0001634be2693482ac38',piece 3 already registered
+@inrecm
+@end
+*/
 #define RECMFILE_VERIFY_NEW   1 
 #define RECMFILE_VERIFY_EXIST 2 
 #define RECMFILE_VERIFY_PROCESSED 4 
@@ -21,24 +58,14 @@
 // register files  /verbose,/full,/wal,/cfg,/meta,",   "/directory=S,/cid=N,"
 void COMMAND_REGFILES(int idCmd,char *kw)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   if (CLUisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      return;
-   };
-
+   if (DEPOisConnected(true) == false) return;
+   if (CLUisConnected(true) == false) return;
+//   zip_t *zipHandle;
+   
    memBeginModule();
    
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+   
    char *directory_source=memAlloc(1024);
    
    if (qualifierIsUNSET("qal_directory") == false)                              // Specific directory ?
@@ -91,7 +118,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
    // Start scanning directory
    DIR *dp;
    struct dirent *ep;
-   struct stat st;
+   //struct stat st;
 
    VERBOSE("Scanning directory '%s'\n",directory_source);
    dp = opendir (directory_source);
@@ -180,7 +207,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
             if (strcmp(fnd_rf->bcktyp,"FULL") == 0 && filter_full == false) { accepted=false; };
             if (strcmp(fnd_rf->bcktyp,"CFG")  == 0 && filter_cfg  == false) { accepted=false; };
             if (strcmp(fnd_rf->bcktyp,"META") == 0 && filter_meta == false) { accepted=false; };
-            if (filter_all == true) {accepted=true;}
+            //if (filter_all == true) {accepted=true;}
             if (strcmp(fndItem->key,itm->key) == 0 && accepted == true)
             {
                char *lastSlash=&fnd_rf->filename[0];
@@ -189,9 +216,9 @@ void COMMAND_REGFILES(int idCmd,char *kw)
                while (lastSlash[0] != 0x00 && lastSlash[0] != '/') { lastSlash--; };
                if (lastSlash[0] == '/') { lastSlash++; strcpy(fileNameOnly,lastSlash); } 
                                    else { strcpy(fileNameOnly,fnd_rf->filename); };
-               int rc=RECMopenRead(fnd_rf->filename);
-               if (rc == false) { rf->processed=flagSetOption(rf->processed,RECMFILE_VERIFY_PROCESSED); continue; };
-               long entries=RECMGetEntries(fnd_rf->filename);
+               RECMDataFile *hDF=RECMopenRead(fnd_rf->filename);
+               if (hDF == NULL) { rf->processed=flagSetOption(rf->processed,RECMFILE_VERIFY_PROCESSED); continue; };
+               long entries=RECMGetEntries2(hDF);
 
                // Check if record already exist ?
                sprintf(query,"select count(*) from %s.backup_pieces where cid=%s and bck_id='%s' and pcid=%d",
@@ -225,7 +252,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
                   int i=0;
                   while( i < entries) 
                   {
-                     if (zip_stat_index(zipHandle, i, 0, &sb) == 0) 
+                     if (zip_stat_index(hDF->zipHandle, i, 0, &sb) == 0) 
                      {
                         char *pwal=strchr(sb.name,'/');
                         if (pwal != NULL) { pwal++;} else { pwal=(char *)&sb.name; };
@@ -261,7 +288,7 @@ void COMMAND_REGFILES(int idCmd,char *kw)
                      i++;
                   }
                };
-               RECMcloseRead();
+               RECMcloseRead(hDF);
                tot_size+=fnd_rf->zipsize;
                tot_pieces++;
             }

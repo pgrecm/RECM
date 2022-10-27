@@ -9,10 +9,7 @@
 /**********************************************************************************/
 void COMMAND_SETSOURCE(int idcmd,char *command_line)
 {
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    if (qualifierIsUNSET("qal_directory") == false)
    { 
@@ -23,7 +20,5 @@ void COMMAND_SETSOURCE(int idcmd,char *command_line)
    { 
       varAdd(SOURCE_BLKSIZE,varGet("qal_blksize"));
    };
-
-   globalArgs.verbosity=saved_verbose;
    return;
 }

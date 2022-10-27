@@ -4,16 +4,45 @@
 /*      export config /cluster [/file=xxx]                                        */
 /*      export config /deposit [/file=xxx]                                        */
 /**********************************************************************************/
+/*
+@command export config
+@definition
+Display or export RECM configuration in command format.  This can be used as a backup of the configuration of the cluster.
+@option "/verbose" "Display more details"
+@option "/file=FILE" "generated command from RECM to a text file."
+@option "/deposit"   "generated command from current DEPOSIT"
+@option "/cluster"   "generated command from current CLUSTER (default)"
+ 
+@example
+@in recm -t CLU12
+@inrecm export config /cluster
+@out #########################################################################
+@out # Export of cluster CLU12 (CID=1)                     2022-10-14 20h29 ##
+@out #########################################################################
+@out register cluster/cid=1;
+@out modify cluster/cid=1/blksize=16M;
+@out modify cluster/cid=1/date_format="YYYY-MM-DD HH24:MI:SS";
+@out modify cluster/cid=1/delwal=-1;
+@out modify cluster/cid=1/maxsize=10G;
+@out modify cluster/cid=1/maxfiles=200;
+@out modify cluster/cid=1/full="count:7";
+@out modify cluster/cid=1/cfg="days:7";
+@out modify cluster/cid=1/meta="days:30";
+@out modify cluster/cid=1/usr="postgres";
+@out modify cluster/cid=1/pwd="postgres";
+@out modify cluster/cid=1/db="postgres";
+@out modify cluster/cid=1/port="5432";
+@out modify cluster/cid=1/waldir="/Library/PostgreSQL/12/WALfiles/";
+@out modify cluster/cid=1/backupdir="/Volumes/pg_backups/";
+@out modify cluster/cid=1/compression=-1;
+@out modify cluster/cid=1/concurrently="no";
+@out modify cluster/cid=1/ip="192.168.1.62";
+@inrecm
+@end
+ 
+*/
 void COMMAND_EXPORTCONFIG(int idcmd,char *command_line)
 {
-   if (CLUisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      return;
-   };
-   if (DEPOisConnected() == false)
-      WARN(WRN_NOTDEPOSITCNX,"Not connected to any deposit.\n");
-
    if (varGetLong(GVAR_CLUCID) == 0)
       WARN(WRN_NOTREGISTERED,"Not registered to any deposit.\n");
 
@@ -35,8 +64,10 @@ void COMMAND_EXPORTCONFIG(int idcmd,char *command_line)
    {
       fh=stdout;
    }
+   int opt_clu=(optionIsSET("opt_cluster") == true);
    if (optionIsSET("opt_deposit") == true)
    {
+      if (DEPOisConnected(true) == false) { memEndModule();return; };
       
       fprintf(fh,"#########################################################################\n");
       sprintf(msg,"# Export of deposit %s",varGet(GVAR_DEPNAME));
@@ -53,8 +84,13 @@ void COMMAND_EXPORTCONFIG(int idcmd,char *command_line)
       if (varGet(GVAR_DEPDB)    != NULL && strcmp(varGet(GVAR_DEPDB),"(null)")    != 0) fprintf(fh,"modify deposit/db=\"%s\";\n",         varGet(GVAR_DEPDB));
       fprintf(fh,"\n");
    }
-   if (optionIsSET("opt_cluster") == true)
+   else
    {
+      if (opt_clu == false) opt_clu=true;  // Assume opt_cluster is the default.
+   }
+   if (opt_clu == true)
+   {
+      if (CLUisConnected(true) == false) { memEndModule();return; };
       fprintf(fh,"#########################################################################\n");
       sprintf(msg,"# Export of cluster %s (CID=%s)",varGet(GVAR_CLUNAME),varGet(GVAR_CLUCID));
       while (strlen(msg) < 54) strcat(msg," ");
@@ -62,7 +98,7 @@ void COMMAND_EXPORTCONFIG(int idcmd,char *command_line)
       strcat(msg," ##");
       fprintf(fh,"%s\n",msg);
       fprintf(fh,"#########################################################################\n");
-      fprintf(fh,"register cluster/cid=%s\n",varGet(GVAR_CLUCID));
+      fprintf(fh,"register cluster/cid=%s;\n",varGet(GVAR_CLUCID));
       if (varGet(GVAR_CLUREADBLOCKSIZE)    != NULL && strcmp(varGet(GVAR_CLUREADBLOCKSIZE),"(null)")    != 0) fprintf(fh,"modify cluster/cid=%s/blksize=%s;\n",         varGet(GVAR_CLUCID),varGet(GVAR_CLUREADBLOCKSIZE));
       if (varGet(GVAR_CLUDATE_FORMAT)      != NULL && strcmp(varGet(GVAR_CLUDATE_FORMAT),"(null)")      != 0) fprintf(fh,"modify cluster/cid=%s/date_format=\"%s\";\n", varGet(GVAR_CLUCID),varGet(GVAR_CLUDATE_FORMAT));
       if (varGet(GVAR_CLUAUTODELWAL)       != NULL && strcmp(varGet(GVAR_CLUAUTODELWAL),"(null)")       != 0) fprintf(fh,"modify cluster/cid=%s/delwal=%s;\n",          varGet(GVAR_CLUCID),varGet(GVAR_CLUAUTODELWAL));
@@ -87,6 +123,7 @@ void COMMAND_EXPORTCONFIG(int idcmd,char *command_line)
                        varGet(GVAR_DEPUSER),
                        varGet(GVAR_CLUCID));
       int rows=DEPOquery(query,0);
+      TRACE("[rc=%d]\n",rows);
       if (DEPOgetString(0,0) != NULL && strcmp(DEPOgetString(0,0),"(null)") != 0) fprintf(fh,"modify cluster/cid=%s/repusr=\"%s\";\n", varGet(GVAR_CLUCID), DEPOgetString(0,0));
       if (DEPOgetString(0,1) != NULL && strcmp(DEPOgetString(0,0),"(null)") != 0) fprintf(fh,"modify cluster/cid=%s/reppwd=\"%s\";\n", varGet(GVAR_CLUCID), unscramble(DEPOgetString(0,1)));
       if (DEPOgetString(0,2) != NULL && strcmp(DEPOgetString(0,2),"(null)") != 0) fprintf(fh,"modify cluster/cid=%s/ip=\"%s\";\n",     varGet(GVAR_CLUCID), DEPOgetString(0,2));

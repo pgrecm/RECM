@@ -7,24 +7,39 @@
 /*         /pwd=<STRING>              Password                                    */
 /*         /db=<STRING>               DEPOSIT database name to create             */
 /**********************************************************************************/
+/*
+@command create deposit
+@definition
+Create a deposit. You must be connected to a cluster prior to call the 'create deposit' command.
+
+@option "/verbose"    "Display more details"
+@option "/usr=USER"   "User owner used to connect to the deposit"
+@option "/pwd=PASSWD" "User's password to connect to"
+@option "/db=DBNAME"  "Database name to create as deposit"
+@option "/force"      "Re-Create DEPOSIT even if it already exist (drop existing database first)."
+
+@example
+@inrecm connect cluster /usr=postgres /pwd=postgres /db=postgres /port=5555 /host=localhost 
+@out recm-inf: Connected to cluster 'REPO12'
+@inrecm create deposit /db=recmadm /pwd=recmadm/usr=recmadm /verbose /force 
+@out ...................
+@out recm-inf: Deposit 'REPO12' created.
+@inrecm
+@end
+ 
+*/
+
 void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
 {
-   int option_force=optionIsSET("opt_force");
-   int option_verbose=optionIsSET("opt_verbose");
-   int saved_verbosity=globalArgs.verbosity;
+   if (CLUisConnected(true) == false) return; 
 
-   globalArgs.verbosity=option_verbose;
-   
-   if (clu_cnx == NULL)                                                                                                            // Must be connected on a cluster
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected. Connect first to a cluster.\n");
-      globalArgs.verbosity=saved_verbosity;
-      return;
-   };
+   int option_force=optionIsSET("opt_force");
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
+
    memBeginModule();
    char *query=memAlloc(1024);
 
-   
    // Find what already exist
    sprintf(query,"select a.db_ok,b.usr_ok from (select count(*) as db_ok from pg_database where datname='%s') a,(select count(*) as usr_ok"
                  " from pg_roles where rolname='%s') b",
@@ -34,7 +49,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    if (PQresultStatus(sys_res) != PGRES_TUPLES_OK) 
    { 
       ERROR(ERR_DBQRYERROR,"Precheck create error.\n"); 
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
     };
@@ -51,7 +65,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    if (is_rdb_ok == 1 && option_force == false)
    {
       ERROR(ERR_DEPOEXIST,"Deposit '%s' already exist. Use '/force' to recreate it.\n",varGet("qal_db"));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    }
@@ -63,7 +76,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
       if (PQresultStatus(sys_res) != PGRES_COMMAND_OK) 
       { 
         ERROR(ERR_DROPDB,"Could not drop database '%s'\n",varGet("qal_db")); 
-        globalArgs.verbosity=saved_verbosity;
         memEndModule();
         return;
       };
@@ -74,7 +86,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    if (PQresultStatus(sys_res) != PGRES_COMMAND_OK) 
    { 
       ERROR(ERR_CREATEDB,"Could not create database '%s'\nError:%s\n",varGet("qal_db"),PQerrorMessage(clu_cnx)); 
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -88,7 +99,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
       {
          PQclear(sys_res);
          ERROR(ERR_CREATEROLE,"Could not create role\nError:%s\n",PQerrorMessage(clu_cnx));
-         globalArgs.verbosity=saved_verbosity;
          memEndModule();
          return;
       };
@@ -101,7 +111,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_GRANTDB,"Could not grant create\nError:%s\n",PQerrorMessage(clu_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    }; 
@@ -111,7 +120,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_GRANTROLE,"Could not grant create\nError:%s\n",PQerrorMessage(clu_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    }; 
@@ -130,7 +138,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    if (PQstatus(sys_cnx) != CONNECTION_OK) 
    { 
       ERROR(ERR_NOTCONNECTED,"Connection to host '%s' failed\n",varGet(GVAR_CLUHOST)); 
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -142,7 +149,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATESCHEMA,"Could not create schema\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    }; 
@@ -153,7 +159,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_GRANTSCHEMA,"Could not grant usage\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    }; 
@@ -164,7 +169,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_GRANTUSAGE,"Could not grant usage\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    }; 
@@ -180,7 +184,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'config'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -195,7 +198,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'config'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -219,20 +221,22 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
                                           "opt_retcfg   varchar(20) default 'days:7',"               //         - retention cfg 
                                           "opt_maxsize  varchar(20) default '10G',"                 //         -  maxsize of a backup piece
                                           "opt_maxfiles bigint default 200,"                        //         - maximum files within a backup piece
+                                          "opt_maxwsize  varchar(20) default '14G',"                //         -  maxsize of a backup piece
+                                          "opt_maxwfiles bigint default 16,"                        //         - maximum files within a backup piece
                                           "opt_datfmt   varchar(40) default 'YYYY-MM-DD HH24:MI:SS'," //         - date format
                                           "opt_waldir   text  default '',"                          //         - WAL directory (not <PGDATA>/pg_wal)
                                           "opt_bkpdir   text  default '',"                          //         - Backup direcotry
                                           "opt_concurindex integer default 0,"
                                           "lstfull      timestamp,"                                 // last FULL backup date
                                           "lstwal       timestamp,"                                 // last WAL backup
-                                          "lstcfg       timestamp)",varGet("qal_usr"));            // last CFG backup
+                                          "lstcfg       timestamp,"
+                                          "lstmeta      timestamp)",varGet("qal_usr"));             // last CFG backup
    printf(".");fflush(stdout);
    sys_res= PQexec(sys_cnx,query); 
    if (PQresultStatus(sys_res) != PGRES_COMMAND_OK)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'clusters'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -265,7 +269,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backups'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -285,7 +288,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_pieces'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -302,7 +304,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_wals'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -310,8 +311,8 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
       
    sprintf(query,"create table %s.backup_dbs (CID      bigint not null,"
                                              "bck_id   varchar(30) not null, "        //      -- backup id
-                                             "db_nam   varchar(30),        "          //      -- database name
-                                             "db_oid   oid,                "          //      -- OID of the database (is the relfilenode of the db)
+                                             "db_nam   varchar(128),         "        //      -- database name
+                                             "db_oid   oid,                  "        //      -- OID of the database (is the relfilenode of the db)
                                              "db_typ   int)",varGet("qal_usr"));      //      -- 0=system db // 1=template // 2=user db
    printf(".");fflush(stdout);
    sys_res= PQexec(sys_cnx,query);
@@ -319,7 +320,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_dbs'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -328,8 +328,8 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    sprintf(query,"create table %s.backup_tbl (CID        bigint not null,"
                                              "bck_id     varchar(30) not null,"                 //      -- backup id
                                              "tab_dbid   oid,        "                 //      -- database name
-                                             "tab_sch    varchar(30),"
-                                             "tab_nam    varchar(30),"                 //      -- OID of the database (is the relfilenode of the db)
+                                             "tab_sch    varchar(128),"
+                                             "tab_nam    varchar(128),"                //      -- OID of the database (is the relfilenode of the db)
                                              "tab_fid    bigint,"                      //      -- 0=system db // 1=template // 2=user db
                                              "tbs_oid    bigint)",                     //      -- OID of the tablespace",
                   varGet("qal_usr")); 
@@ -339,7 +339,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_tbl'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -358,7 +357,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_ndx'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -375,7 +373,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_tbs'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -395,7 +392,6 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    {
       PQclear(sys_res);
       ERROR(ERR_CREATTABLE,"Could not create table 'backup_rp'\nError:%s\n",PQerrorMessage(sys_cnx));
-      globalArgs.verbosity=saved_verbosity;
       memEndModule();
       return;
    };
@@ -437,6 +433,5 @@ void COMMAND_CREATEDEPOSIT(int idcmd,char *command_line)
    varAdd(GVAR_DEPNAME ,varGet(GVAR_CLUNAME));     
    globalArgs.configChanged=1;
    SaveConfigFile("DEPO",varGet(GVAR_DEPNAME),SECTION_DEPOSIT);
-   globalArgs.verbosity=saved_verbosity;
    memEndModule();
 }

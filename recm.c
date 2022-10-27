@@ -1,4 +1,3 @@
-/**********************************************************************************/
 /* RECM                                                                           */
 /* To build, you need the following components installed :                        */
 /*     - ncurses                                                                  */
@@ -10,7 +9,7 @@
 #include <unistd.h>
 #include <sys/errno.h>
 #include <time.h>
-#include <wchar.h>
+//#include <wchar.h>
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -36,21 +35,121 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <getopt.h>
+#include <getopt.h>
+#include <pthread.h>
 
-//#define VERSION "1.2.0"
-#define VERSION "1.1"
+
+#define VERSION_11 "1.1.0"                                                      /* Previous DEPOSIT versions. Required for Deposit upgrade */
+#define VERSION_12 "1.2.0"                                                      /* Previous DEPOSIT versions. Required for Deposit upgrade */
+
+#define CURRENT_VERSION "1.2.0"                                                 /* Current RECM version  last change : 25/07/2022 */
+
+#if defined(BUILD_ID)
+#define CURRENT_BUILD  BUILD_ID
+#else
+#define CURRENT_BUILD   1                                                       /* Build date       2 = 25/07/2022 */
+#endif
+
+
 //#define use_libzip_18
+             
+/* Thread specific variables */
+#define THREAD_RUNNING         0                                                /* Thread table item status code : running */
+#define THREAD_FREE            1                                                /* Thread table item status code : available */
+#define THREAD_END_SUCCESSFULL 2                                                /* Thread table item status code : thread end successfully */
+#define THREAD_END_FAILED      4                                                /* Thread table item status code : thread end with failure */
+#define WORKER_DISPLAY_PROGRESSION 3                                            /* time (in sec) between the display of worker process progression */
+#define MAX_THREADS            32                                               /* Max size of the threads table */
+
+#define TREE_ITEM_FILE         1                                                /* Object is a FILE */
+#define TREE_ITEM_DIR          2                                                /* Object is a SUB-DIRECTORY */
+#define TREE_ITEM_LINK         4                                                /* Object is a LINK */
+                                                                                
+#define TREE_ITEM_INDEX        8                                                /* Object is PostgreSQL index (NNNNNNN)     */
+#define TREE_ITEM_INDEX_VM    16                                                /* Index visibility map       (NNNNNNN_vm)  */
+#define TREE_ITEM_INDEX_FSM   32                                                /* Index Free Space Map       (NNNNNNN_fsm) */
+#define TREE_ITEM_LOGFILE     64                                                /* PostgreSQL cluster log file (will never be saved */
+                                                                                
+#define HARD_LIMIT_MINFILES 10                                                  /* hard limit : minimum accepted value */
+#define HARD_LIMIT_MINSIZE  "10M"                                               /* hard limit : minimum accepted value */
+#define HARD_LIMIT_MINWALFILES 10                                               /* hard limit : minimum accepted value */
+#define HARD_LIMIT_MINWALSIZE  "4M"                                             /* hard limit : minimum accepted value */
+
+typedef struct TreeItem TreeItem;
+struct TreeItem
+{
+   TreeItem *next;
+   off_t     size;                                                              // Object size
+   uid_t     st_uid;                                                            // User ID of owner
+   gid_t     st_gid;                                                            // Group ID of owner
+   mode_t    st_mode;                                                           // File type and mode
+   time_t    mtime;                                                             // File mtime (used for WAL backups)
+   char     *name;                                                              // Name of the objec
+   unsigned  flag;                                                              // Flags
+   TreeItem *path;                                                              // Directory where the object is stored
+   int       sequence;                                                          // Group number (RECM block number)
+   int       used;                                                              // Indicate the object has already been added to the RECM file
+};
+
+typedef struct TreeEntry TreeEntry;
+struct TreeEntry
+{
+   TreeItem *first;                                                             // First item in the tree
+   TreeItem *last;                                                              // Last item in the tree
+   TreeItem *currentFolder;                                                     // Last item in the tree
+   long entries;                                                                // Number of entries (files)
+   long long totalsize;                                                         // Total size of the tree
+};
+
+
+typedef struct RECMDataFile RECMDataFile;
+struct RECMDataFile
+{
+   int pieceNumber;                                                             // Piece number of the backup
+   int parallel_count;                                                          // number of parallel processes
+   zip_uint32_t compLevel;                                                      // Compresssion level
+   char *tarFileName;                                                           // ZIP file name
+   zip_t *zipHandle;                                                            // ZIP hande
+   zip_error_t zipError;                                                        // ZIP Error structure
+   time_t start_time;                                                           // Creation start time
+};
+
+typedef struct ThreadData ThreadData;
+struct ThreadData
+{
+   int          idThread;
+   int          state;                                                          // Return code of the thread
+   int          rc;                                                             // Return code of the thread
+   int          parallel_count;                                                 // number of parallel processes
+   long         pieceNumber;                                                    // ID of the process 
+   pthread_t    threadID;                                                       // Thread process data
+   char         *bck_id;                                                        // Backup UID
+   char         *bck_typ;                                                       // Backup TYPE : 'FULL','WAL'
+   TreeEntry    *pgdataTree;                                                    // PGDATA directory structure
+   char         *rootdirectory;                                                 // path of the ROOT directory
+   RECMDataFile *zH;                                                            // RECM handle
+};
+
+
+
+static ThreadData threads[MAX_THREADS];                                         // Thread table
+pthread_mutex_t mutex1 = PTHREAD_MUTEX_INITIALIZER;                             // Thread MUTEX flag
+
+unsigned long thread_all_file_processed;                                        // Number of files processed by all the thread
+unsigned long thread_all_size_processed;                                        // Total file size processed by all the thread 
+unsigned long verification_limitFile;                                           // Verification counters
+unsigned long verification_limitSize;                                           // Verification counters
+
 
 
 /* Environment variables */
-#define ENVIRONMENT_RECM_META_DIR         "RECM_METADIR"                        // (CHANGE : 0xA0004 ) METADATA custom generation folder
-#define ENVIRONMENT_RECM_CFG_ADDFILES     "RECM_CFG_ADDFILES"                   // Backup CONFIG custom files
-#define ENVIRONMENT_RECM_CONFIG           "RECM_CONFIG"                         // Change default recm.conf file name and location
-#define ENVIRONMENT_HOME                  "HOME"                                // Unix home folder
-#define ENVIRONMENT_RECM_PGBIN            "RECM_PGBIN"                          // Force RECM tool to use a specific version
-#define ENVIRONMENT_RECM_WALCOMP_EXT      "RECM_WALC_EXT"                       // If  WAL files are compressed, they have by default '.gz' extension
-#define ENVIRONMENT_RECM_RESTORE_COMMAND  "RECM_RESTORE_COMMAND"                // If  WAL files are compressed, they have by default '.gz' extension
-#define ENVIRONMENT_RECM_COMPRESS_METHOD  "RECM_COMPRESS_METHOD"                // Change default compression method (Change : 0xA000D)  
+#define ENVIRONMENT_RECM_META_DIR         "RECM_METADIR"                        /* (CHANGE : 0xA0004 ) METADATA custom generation folder              */
+#define ENVIRONMENT_RECM_CONFIG           "RECM_CONFIG"                         /* Change default recm.conf file name and location                    */
+#define ENVIRONMENT_HOME                  "HOME"                                /* Unix home folder                                                   */
+#define ENVIRONMENT_RECM_PGBIN            "RECM_PGBIN"                          /* Force RECM tool to use a specific version                          */
+#define ENVIRONMENT_RECM_WALCOMP_EXT      "RECM_WALC_EXT"                       /* If  WAL files are compressed, they have by default '.gz' extension */
+#define ENVIRONMENT_RECM_RESTORE_COMMAND  "RECM_RESTORE_COMMAND"                /* If  WAL files are compressed, they have by default '.gz' extension */
+#define ENVIRONMENT_RECM_COMPRESS_METHOD  "RECM_COMPRESS_METHOD"                /* Change default compression method (Change : 0xA000D)               */
 
 /* Backup options */
 #define BACKUP_OPTION_NOINDEX       1
@@ -91,32 +190,32 @@ long backupUnSetOption(long flag,long bit)
 typedef struct index_details index_details;
 struct index_details
 {
-   char *    ndx_own;          // owner of the index
-   char *    ndx_cat;          // catalog/database of the index
-   char *    ndx_sch;          // schema of the index
-   char *    ndx_nam;          // Index Name
-   char *    ndx_tbl;          // Index table name
-   char *    ndx_rfn;          // relfilenode (name of the file in the folder)
-   char *    ndx_row;          // owner of the index
-   char *    ndx_ddl;          // create indes statement (taken from indexdef column in pg_indexes)
+   char *    ndx_own;                                                           // owner of the index
+   char *    ndx_cat;                                                           // catalog/database of the index
+   char *    ndx_sch;                                                           // schema of the index
+   char *    ndx_nam;                                                           // Index Name
+   char *    ndx_tbl;                                                           // Index table name
+   char *    ndx_rfn;                                                           // relfilenode (name of the file in the folder)
+   char *    ndx_row;                                                           // owner of the index
+   char *    ndx_ddl;                                                           // create indes statement (taken from indexdef column in pg_indexes)
 } ;
 
 
-typedef struct RecmFileItemProperties RecmFileItemProperties;
+typedef struct RecmFileItemProperties RecmFileItemProperties;                   // RECM Item file properties
 struct RecmFileItemProperties
 {
-   mode_t    mode;        /* File type and mode */
-   uid_t     uid;         /* User ID of owner */
-   gid_t     gid;         /* Group ID of owner */
+   mode_t    mode;                                                              // File type and mode
+   uid_t     uid;                                                               // User ID of owner
+   gid_t     gid;                                                               // Group ID of owner
 };
 
-typedef struct ArrayItem ArrayItem;
+typedef struct ArrayItem ArrayItem;                                             // Memory dynamic array
 struct ArrayItem
 {
    ArrayItem *prv;
    ArrayItem *nxt;
-   char *key;
-   void *data;
+   char *key;                                                                   // Key, if array is sorted
+   void *data;                                                                  // user data
 };
 
 typedef struct Array Array;
@@ -125,24 +224,26 @@ struct Array
    ArrayItem *first;
    ArrayItem *last;
    ArrayItem *current;
-   int sorted;        // 0=not sorted   1=up Order   2=Down Order
-   int count;
+   int sorted;                                                                  // 0=not sorted   1=up Order   2=Down Order
+   int count;                                                                   // Number of item in array
 };
 
-struct globalArgs_t {
-    int  configChanged;         /* 1 if configuration has changed */
-    int  verbosity;             /* -v verbosity */
-    int  debug;                 /* -g debug */
-    int  exitRequest;
-    int  exitOnError;           /* set exit_on_error=yes|no*/           
-    char *host;                 /* -h host */
-    char *port;                 /* -p port */
-    char *username;             /* -U user */
-    char *userpass;             /* -P userpassword */
-    int  isCommand;             /* -c argiment is a command to execute */
-    char *arguments;            /* if option '-c' is present, this is a command, otherwise, this is a script to execute */
-    FILE *htrace;
-    char *tracefile;
+struct globalArgs_t                                                             // Global argument table
+{
+    int  configChanged;                                                         // Signal configuration has changed
+    int  verbosity;                                                             // -v verbosity
+    int  verbosity_bd;                                                          // -v verbosity state before 'debug/on'
+    int  debug;                                                                 // -g debug 
+    int  exitRequest;                                                           // 
+    int  exitOnError;                                                           // set exit_on_error=yes|no           
+    char *host;                                                                 // -h host
+    char *port;                                                                 // -p port
+    char *username;                                                             // -U user
+    char *userpass;                                                             // -P userpassword
+    int  isCommand;                                                             // -c argiment is a command to execute
+    char *arguments;                                                            // if option '-c' is present, this is a command, otherwise, this is a script to execute
+    FILE *htrace;                                                               // when using @debug/on/file=xxxx, file handle of the trace file
+    char *tracefile;                                                            // when using @debug/on/file=xxxx, trace file name
 } globalArgs;
 
 #define TRACE(...) ({ if (globalArgs.debug == true) { fprintf(stderr,"recm-dbg(%d)[%s]: ",__LINE__,__FUNCTION__);fprintf(stderr,__VA_ARGS__); };if (globalArgs.htrace != NULL){fprintf(globalArgs.htrace,"recm-dbg(%d)[%s]: ",__LINE__,__FUNCTION__);fprintf(globalArgs.htrace,__VA_ARGS__);}})
@@ -154,7 +255,7 @@ struct globalArgs_t {
 #define ERROR(err,fmt, ...) ({ fprintf(stderr,"recm-err(%x04): ",err);fprintf(stderr,fmt, ## __VA_ARGS__);if (globalArgs.htrace != NULL){fprintf(globalArgs.htrace,"recm-err(%d-%d)[%s]: ",err,__LINE__,__FUNCTION__);fprintf(globalArgs.htrace,fmt, ## __VA_ARGS__);};if (globalArgs.exitOnError == true) { exit(err); }; })
 
 
-// Synta error 
+// Error code 
 #define ERR_SUCCESS          0
 #define ERR_INVOPTION        1 
 #define ERR_MISQUALVAL       2 
@@ -231,12 +332,13 @@ struct globalArgs_t {
 #define ERR_FULLREQUIRED    72
 #define ERR_INVALIDCID      73
 #define ERR_BCKINPROGRESS   74
-
+#define ERR_MISSDIR         75
+#define ERR_STHFAILED       76
 
 #define ERR_INTERNALERROR   199
-#define IE_SETPRM     "0x001"          // ERR_INTERNALERROR Sub-error when changing parameter
-#define IE_RELOADCONF "0x002"          // ERR_INTERNALERROR Sub-error during reload config
-#define IE_RUNNINGBCK "0x003"          // ERR_INTERNALERROR Sub-error during cancel backup
+#define IE_SETPRM           "0x001"          /* ERR_INTERNALERROR Sub-error when changing parameter*/
+#define IE_RELOADCONF       "0x002"          /* ERR_INTERNALERROR Sub-error during reload config   */
+#define IE_RUNNINGBCK       "0x003"          /* ERR_INTERNALERROR Sub-error during cancel backup   */
 
 #define WRN_INVCOMPLVL       201
 #define WRN_BADVERSION       202
@@ -256,7 +358,7 @@ struct globalArgs_t {
 #define WRN_BADLSN           216
 #define WRN_LOCKEDNCOMPLETE  217
 #define WRN_CHANGEDNAME      218
-
+#define WRN_SLOTPRESENT      219
 
 #define ERR_DBQRYERROR     101
 #define ERR_DROPDB         102
@@ -272,11 +374,13 @@ struct globalArgs_t {
 #define ERR_ENDBCKFAIL     112
 #define ERR_MISPRIV        113
 #define ERR_CLUNONAME      114
+#define ERR_MISSQUAL       115
+#define ERR_MAPNOTFND      116
 
 #define WRN_CLUNONAME    200
 #define WRN_NOARCHIVE    201    
 
-struct commands
+struct commands      // Definition of commands, options and qualifiers
 {
    int  id;
    char *cmd;
@@ -344,14 +448,13 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 #define RECM_BCKTYP_CFG         "CFG"
 #define RECM_BCKTYP_META        "META"
 
-#define RECM_LOGDIR             "@logdir"                                       // CHANGE: 0xA0005
+#define RECM_LOGDIR             "@logdir"
 #define RECM_WALSTART           "@walStart"
-#define SYSVAR_CURRENT_RECMFILE "@curRECMfile"                                  // Current RECMfile name
 #define SYSVAR_HOSTNAME         "@hostname"
 #define SYSVAR_CMDFILE          "@cmdfile"
 #define SYSVAR_TARGET           "@target"
 #define SYSVAR_DEPOSIT          "@deposit"
-#define SYSVAR_LASTLSN          "@lastLSN"                                      // cluster_doSwitchWAL()
+#define SYSVAR_LASTLSN          "@lastLSN"
 #define RECM_BCKTYPE            "BckType"
 #define RECM_VERSION            "@RecmVersion"
 #define RECM_BCKID              "@backupID"
@@ -367,21 +470,17 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 #define SYSVAR_DATE_FORMAT          "@date_format"
 #define SYSVAR_HISTDEEP             "@historic_Deep"
 
-// #define SYSVAR_CFGFILES             "@config_files"
 #define SYSVAR_AUTODELWAL           "@auto_delete_wal"
 #define SYSVAR_DELAYDELWAL          "@delay_delete_wal"
 #define SYSVAR_READBLOCKSIZE        "@read_block_size"
 #define SYSVAR_BACKUP_MAXSIZE       "@backup_maxsize"
 #define SYSVAR_BACKUP_MAXFILES      "@backup_maxfile"
-#define SYSVAR_BACKUP_CFGFILES      "@backup_cfg_files"     // Add custom files to the configuration backup 
+#define SYSVAR_BACKUP_CFGFILES      "@backup_cfg_files" 
 #define SYSVAR_BACKUP_EXCLDIR       "@backup_excldir"
 #define SYSVAR_RETENTION_FULL       "@retentionFull"
 #define SYSVAR_RETENTION_CONFIG     "@retentionConfig"
 
-//#define SYSVAR_RETENTION_MODE       "@retention_mode"       // DAY | COUNT
-//#define SYSVAR_RETENTION_COUNT      "@retention_count"      // value DAY: number of days | COUNT: number of full backup kept
-
-#define SYSVAR_PGBIN                "@defaultPGBIN"         // pg_ctl location
+#define SYSVAR_PGBIN                "@defaultPGBIN"
 #define SYSVAR_TIMEZONE             "@defaultTimeZone"
 
 // Cluster status
@@ -416,9 +515,9 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 #define GVAR_CLUPGDATA  "CluPGDATA"
 #define GVAR_WALDIR     "CluWALdir"
 #define GVAR_BACKUPDIR  "CluBackupdir"
-#define GVAR_COMPLEVEL  "CluCompressionLevel"  //-1=disable  0->9 Compression level
-#define GVAR_SOCKPATH   "CluUSP"               // Unix socket Path
-#define GVAR_PGCTL      "CluPG_CTL"            // pg_ctl location
+#define GVAR_COMPLEVEL  "CluCompressionLevel"
+#define GVAR_SOCKPATH   "CluUSP"
+#define GVAR_PGCTL      "CluPG_CTL"
 #define GVAR_CLUTZ      "CluTimeZone"
 #define GVAR_CLUDS      "CluDateStyle"
 
@@ -429,42 +528,44 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 #define GVAR_CLUREADBLOCKSIZE        "CluRead_block_size"
 #define GVAR_CLUBACKUP_MAXSIZE       "CluBackup_maxsize"
 #define GVAR_CLUBACKUP_MAXFILES      "CluBackup_maxfile"
+#define GVAR_CLUBACKUP_MAXWALSIZE    "CluBackup_maxWalSize"
+#define GVAR_CLUBACKUP_MAXWALFILES   "CluBackup_maxWalFile"
 #define GVAR_CLURETENTION_FULL       "CluRetentionFull"
 #define GVAR_CLURETENTION_CONFIG     "CluRetentionConfig"
 #define GVAR_CLURETENTION_META       "CluRetentionMeta"    
 #define GVAR_REINDEXCONCURRENTLY     "CLUConcurrentlyReIndex"
 
 // Variables from configuration file : Deposit
-#define GVAR_DEPDESCR   "DepDescription"
-#define GVAR_DEPHOST    "DepoHost"
-#define GVAR_DEPPORT    "DepoPort"
-#define GVAR_DEPDB      "DepoDB"
-#define GVAR_DEPUSER    "DepoUser"
-#define GVAR_DEPPWD     "DepoPwd"
-#define GVAR_DEPNAME    "DepoName"
+#define GVAR_DEPDESCR       "DepDescription"
+#define GVAR_DEPHOST        "DepoHost"
+#define GVAR_DEPPORT        "DepoPort"
+#define GVAR_DEPDB          "DepoDB"
+#define GVAR_DEPUSER        "DepoUser"
+#define GVAR_DEPPWD         "DepoPwd"
+#define GVAR_DEPNAME        "DepoName"
 
-#define VAR_SET_VALUE      "<SET>"
-#define VAR_UNSET_VALUE    "<UNSET>"
-#define OPTION_SET_VALUE   "<OPT_SET>"
-#define OPTION_UNSET_VALUE "<OPT_UNSET>"
-#define QAL_UNSET       "<MISSING>"
+#define VAR_SET_VALUE       "<SET>"
+#define VAR_UNSET_VALUE     "<UNSET>"
+#define OPTION_SET_VALUE    "<OPT_SET>"
+#define OPTION_UNSET_VALUE  "<OPT_UNSET>"
+#define QAL_UNSET           "<MISSING>"
 
-#define GVAR_CLUFULLVER "CluFulLVersion"
+#define GVAR_CLUFULLVER     "CluFulLVersion"
 
 
 // Variables from configuration file : Auxiliary connection
-#define GVAR_AUXDESCR   "AuxDescription"
-#define GVAR_AUXHOST    "AuxHost"
-#define GVAR_AUXPORT    "AuxPort"
-#define GVAR_AUXUSER    "AuxUser"
-#define GVAR_AUXPWD     "AuxPwd"
-#define GVAR_AUXDB      "AuxDB"
-#define GVAR_AUXNAME    "AuxName"
-#define GVAR_AUXCID     "AuxCID"
-#define GVAR_AUXVERSION "AuxVersion"
-#define GVAR_AUXFULLVER "AuxFulLVersion"
-#define GVAR_AUXTL      "AuxTL"
-#define GVAR_AUXPGDATA  "AuxPGDATA"
+#define GVAR_AUXDESCR       "AuxDescription"
+#define GVAR_AUXHOST        "AuxHost"
+#define GVAR_AUXPORT        "AuxPort"
+#define GVAR_AUXUSER        "AuxUser"
+#define GVAR_AUXPWD         "AuxPwd"
+#define GVAR_AUXDB          "AuxDB"
+#define GVAR_AUXNAME        "AuxName"
+#define GVAR_AUXCID         "AuxCID"
+#define GVAR_AUXVERSION     "AuxVersion"
+#define GVAR_AUXFULLVER     "AuxFulLVersion"
+#define GVAR_AUXTL          "AuxTL"
+#define GVAR_AUXPGDATA      "AuxPGDATA"
 
 // Command line index
 #define CMD_EXIT             1
@@ -479,6 +580,9 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 #define CMD_REGFILES         1007
 #define CMD_DUPLICATEPARTIAL 1008
 #define CMD_SETSOURCE        1009
+#define CMD_SETMAPPING       1010
+#define CMD_LISTMAPPING      1011
+#define CMD_DELMAPPING       1012
 
 #define CMD_BACKUPWAL        1201
 #define CMD_BACKUPCFG        1202
@@ -520,6 +624,7 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 #define CMD_CNXTARGET        1240
 #define CMD_EXPCFG           1241
 #define CMD_STATUS           1242
+#define CMD_UPGRADEDEPOSIT   1244
 
 // DEBUGGING functions
 // @SHOW VARIABLES : show variables /name="<search>"
@@ -532,7 +637,7 @@ PGresult *AUXresult[CNX_MAX_LEVELS];
 // S = String
 // N = Numeric
 
-struct optHelp
+struct optHelp  // command Help definition structure
 {
    int  id;
    char *opt;
@@ -597,20 +702,27 @@ struct RecmDir
 };
 
 
-static Array      *oid_indexes=NULL;                     // oid of all indexes at backup time
-static Array      *zip_filelist=NULL;                    // List of all pieces created during backup
-static zip_t      *zipHandle=NULL;
-static zip_error_t zipError;
-static char       *tarFileName=NULL;
-static long sequence;                                    // Sequence counter used by 'backup' command to create pieces.
+#define TARGET_TABLESPACE 1
+
+typedef struct TargetPiece TargetPiece;
+struct TargetPiece
+{
+    int    tgtype;   // Target type 'TARGET_TABLESPACE'
+    char   *name;    // Target 'name'
+    char   *value;   // Target 'value'
+    void   *t1;      // used by 'duplicate'
+    void   *t2;      // used by 'duplicate'
+    void   *t3;
+};
+
+
+static Array   *oid_indexes=NULL;                                               // oid of all indexes at backup time
+static Array   *zip_filelist=NULL;                                              // List of all pieces created during backup
+static Array   *target_list=NULL;
+static long    sequence;                                                        // Sequence counter used by 'backup' command to create pieces.
 
 static void *memory_allocated[512];
 static int memory_allocated_pointer=0;
-
-// [0][m][m][m][m][m][m][m][m][0][m][m][m][m][m][m][m][m]
-//  ^                          ^
-// alloc position
-//                  memFreeAll |-----------------------|
 
 void memBeginModule()
 {
@@ -653,6 +765,151 @@ void *memAlloc(int size)
    return(mem);
 }
 
+
+/**********************************************************************************/
+/* Create Memory Tree                                                             */
+/**********************************************************************************/
+TreeEntry *treeCreate()
+{
+   TreeEntry *root=malloc(sizeof(TreeEntry));
+   root->totalsize=0;
+   root->entries=0;
+   root->first=NULL;
+   root->last=NULL;
+   root->currentFolder=NULL;
+   return(root);
+}
+
+/**********************************************************************************/
+/* Destroy Memory Tree and its content                                            */
+/**********************************************************************************/
+void treeDestroy(TreeEntry *root)
+{
+   TRACE("Cleanup start.\n");
+   TreeItem *itm=root->first;
+   while (itm != NULL)
+   {
+      free(itm->name);
+      TreeItem *nxt=itm->next;
+      free(itm);
+      itm=nxt;
+   }
+   free(root);
+   TRACE("Cleanup End.");
+}
+
+/**********************************************************************************/
+/* Memorize all objects from directories                                          */
+/**********************************************************************************/
+void treeAddItem(TreeEntry *tree,const char *filename,unsigned flag,struct stat *st)
+{
+   TreeItem *itm=malloc(sizeof(TreeItem));
+   itm->flag=flag;
+   itm->name=strdup(filename);
+   itm->size=st->st_size;
+   itm->st_mode=st->st_mode;
+   itm->st_uid=st->st_uid; 
+   itm->st_gid=st->st_gid; 
+   itm->mtime=st->st_mtime;
+   itm->next=NULL;
+   if (flag != TREE_ITEM_FILE)
+   {
+      tree->currentFolder=itm;itm->path=NULL; 
+      TRACE("treeAddItem(Directoryname='%s' [path:'%s'])\n",filename,tree->currentFolder->name);
+   }
+   else
+   {
+      itm->path=tree->currentFolder;
+      if (tree->currentFolder != NULL)
+      {
+         TRACE("treeAddItem(filename='%s' [path:'%s'])\n",filename,tree->currentFolder->name);
+      }
+      else
+      {
+         TRACE("treeAddItem(filename='%s' [path:'<NULL>'])\n",filename);
+      }
+   };
+   if (tree->last == NULL)
+   {
+      tree->first=itm;
+      tree->last=itm;
+   }
+   else
+   {
+      tree->last->next=itm;
+      tree->last=itm;
+   }
+   tree->entries++;
+   tree->totalsize+=st->st_size;
+}
+
+/********************************************************************************/
+/* Initialize Thread array                                                      */
+/********************************************************************************/
+void threadInitalizeTable()
+{
+   thread_all_file_processed=0;                                    // Reset Statistics counters
+   thread_all_size_processed=0;                                    // Reset Statistics counters  
+   int idThread;
+   for(idThread=0; idThread < MAX_THREADS; idThread++) 
+   {
+      threads[idThread].state=THREAD_FREE;                         // Reset ALL threadID.  When a thread is finish, this value is set to THREAD_FREE.
+      threads[idThread].rc=0; 
+      threads[idThread].bck_id=malloc(128);
+      threads[idThread].bck_typ=malloc(10);
+      threads[idThread].rootdirectory=malloc(1024);
+   };
+   threads[0].pieceNumber=THREAD_FREE;
+}
+
+/********************************************************************************/
+/* Check how many thread is currently running                                   */
+/********************************************************************************/
+int threadCountRunning(int maxThreads)
+{
+   int count=0;
+//   pthread_mutex_lock( &mutex1 );                                               // Begin of critical section
+   int idThread=0;
+   while (idThread < MAX_THREADS) 
+   {
+      if (threads[idThread].state == THREAD_RUNNING) count++;
+      idThread++;
+   };
+//   pthread_mutex_unlock( &mutex1 );                                             // End of critical section
+   return(count);
+}
+
+/********************************************************************************/
+/* Get Available thread table item for next thread                              */
+/* used in 'backup full' and backup wal' command                                */
+/********************************************************************************/
+int ThreadGetAvailableProcess(int maxThreads)
+{
+   pthread_mutex_lock( &mutex1 );                                               // Begin of critical section
+   int selected= -1;
+   int count=20;
+   while (count > 0 && selected == -1)
+   {
+      int idThread=0;
+      while (idThread < MAX_THREADS && threads[idThread].state == THREAD_RUNNING) { idThread++; };
+      if (idThread < MAX_THREADS && threads[idThread].state != THREAD_RUNNING) 
+      {
+         selected=idThread;
+         threads[idThread].state=THREAD_FREE;
+      }
+      else
+      {
+         pthread_mutex_unlock( &mutex1 );                                       // End of critical section during wait...
+         printf("*** Wait ***\n");
+         sleep(1);
+         count--;
+         pthread_mutex_lock( &mutex1 );                                         // Begin of critical section
+      };
+   }
+   pthread_mutex_unlock( &mutex1 );                                             // End of critical section
+   return (selected);
+}
+
 /**********************************************************************************/
 /* Used for 'TAG keyword'                                                         */
 /*      for 'restore point name'                                                  */
@@ -666,6 +923,7 @@ int isValidName(const char *buffer)
    {
       switch (p[0])
       {
+      case 45 : ;              // '-'
       case 48 ... 57  : ;      // '0'..'9'
       case 97 ... 122 : ;      // 'a'..'z' 
       case 65 ... 90  : ;      // 'A'..'Z'
@@ -947,9 +1205,8 @@ int maskIsValid(const char *mask)
 
 char *maskCreate(mode_t mode)
 {
-   static char *msk=NULL;
-   if (msk == NULL) msk=malloc(10);
-   msk[0]=0x00;
+   static char msk[20];
+   memset(msk,0x00,20);
    if ((mode & S_IRUSR) == S_IRUSR) strcat(msk,"R");
    if ((mode & S_IWUSR) == S_IWUSR) strcat(msk,"W");
    if ((mode & S_IXUSR) == S_IXUSR) strcat(msk,"X");
@@ -961,14 +1218,13 @@ char *maskCreate(mode_t mode)
    if ((mode & S_IROTH) == S_IROTH) strcat(msk,"R");
    if ((mode & S_IWOTH) == S_IWOTH) strcat(msk,"W");
    if ((mode & S_IXOTH) == S_IXOTH) strcat(msk,"X");
-   //TRACE("ARGS(mode=%d) --> RETURN (char *) '%s'\n",mode,msk);
-   return(msk);
+   //TRACE("ARGS(mode=%d (%02x)) --> RETURN (char *) '%s'\n",mode,mode,msk);
+   return(&msk[0]);
 }
 
 mode_t maskTranslate(const char *mask)
 {
-   mode_t mode;
-   int invalid=0;
+   mode_t mode=0;
    char *pmask=(char *)mask;
    int grp=0; // 0=owner 1=group 2=other
    while (pmask[0] != 0x00)
@@ -1017,7 +1273,7 @@ mode_t maskTranslate(const char *mask)
    if ((mode & S_IROTH) == S_IROTH) { strcat(verif,"R"); } else { strcat(verif,"-"); };
    if ((mode & S_IWOTH) == S_IWOTH) { strcat(verif,"W"); } else { strcat(verif,"-"); };
    if ((mode & S_IXOTH) == S_IXOTH) { strcat(verif,"X"); } else { strcat(verif,"-"); };
-   TRACE("ARGS(mask='%s') --> RETURN (mod_t) %x\n",mask,mode);
+   TRACE("ARGS(mask='%s') --> RETURN (mod_t) %x VERIF='%s'\n",mask,mode,verif);
    return(mode);
 }
 
@@ -1258,7 +1514,8 @@ long getHumanSize(const char *inbuffer)
 {
    char *wrkstr=malloc(100);
    char *res=wrkstr;
-   char c='m'; char *cpos=strchr(inbuffer,c);
+   char c='b'; 
+   char *cpos=strchr(inbuffer,c);
    if (cpos == NULL) { c='M';cpos=strchr(inbuffer,c); };
    if (cpos == NULL) { c='g';cpos=strchr(inbuffer,c); };
    if (cpos == NULL) { c='G';cpos=strchr(inbuffer,c); };
@@ -1273,6 +1530,7 @@ long getHumanSize(const char *inbuffer)
 //      printf("getsize(%s) : res='%s'\n",inbuffer,wrkstr);
       cpos++;
    };
+//   printf("res=%s\n",wrkstr);
    res[0]=cpos[0]; // Take the terminator string
    long result;
    result=atol(wrkstr);
@@ -1287,6 +1545,7 @@ long getHumanSize(const char *inbuffer)
       default : ; // Byte (value as it)
    };
    TRACE ("ARGS(inbuffer='%s') --> RETURN (long)%ld\n",inbuffer,result);
+   free(wrkstr);
    return(result);
 }
 
@@ -1339,8 +1598,6 @@ int findStringInList(const char *rootdir,char *list,const char* item)
    strcat(fullName,rootdir); 
    strcat(fullName,"/"); 
    strcat(fullName,item);
-   char *strs=list;
-   
    int fnd=0;
    if (strstr(list,fullName) != NULL) { fnd++; }
    free(fullName);
@@ -1844,18 +2101,16 @@ int CLUcheckPrivilege(int priv)
 /* translate variabbles to destination buffer                                   */
 /* Varable are identified by '{name}'                                           */
 /********************************************************************************/
-void varTranslate(char *outbuffer,const char *inbuffer,int recursive) 
+void varTranslate(char *outbuffer,const char *inbuffer,int recursive)
 {
-   //TRACE("ARGS(outbuffer='%s' inbuffer='%s' recursive=%d)\n",outbuffer,inbuffer,recursive);
-   if (recursive > 3) 
+   if (recursive > 3)
    {
       strcpy(outbuffer,inbuffer);
       TRACE("ARGS(outbuffer='%s' inbuffer='%s' recursive=%d) More than 3 recursive call\n",outbuffer,inbuffer,recursive);
-      return; 
+      return;
    };
    char *tmpbuff=malloc(1024);
    char *wrkbuff=malloc(1024);
-   int b,e;
    char *tmpvar=NULL;
    tmpvar=date_system("%Y");varAdd("YYYY",tmpvar);
    tmpvar=date_system("%y");varAdd("YY",tmpvar);
@@ -1943,7 +2198,7 @@ Array* arrayCreate(int sort)
 //********************************************************************************
 // Find first item in ARRAY
 //********************************************************************************
-ArrayItem* arrayFind(Array *array,const char * key)
+* arrayFind(Array *array,const char * key)
 {
    array->current=array->first;
    while (array->current != NULL && strcmp(array->current->key,key) < 0) { array->current=array->current->nxt; };
@@ -2161,7 +2416,6 @@ ArrayItem *arrayPop(Array *array)
 
 long hex2int(const char *hex)
 {
-    int i;
     unsigned long val = 0;
     char *a=(char *)hex;
     a+=(strlen(hex)-1);
@@ -2198,7 +2452,6 @@ void createUID()
 int shell(const char *command_line,int display_log)
 {
    TRACE("ARGS(command_line='%s' display_log=%d)\n",command_line,display_log);
-   int rc=0;
    char buf[1024];
    FILE *fp;
    if ((fp = popen(command_line, "r")) == NULL) { return (ERR_SHELLERROR); };
@@ -2251,48 +2504,6 @@ int pg_ctl(int action,const char *pgctl,int display_log)
    return rc;
 }
 
-//bin/pg_ctl --version|awk '{print $3}'|cut -d. -f1
-int pg_binaryVersion()
-{
-   FILE *fp;
-   int rc=-1;
-   int stop;
-   static char buf[1024];
-   static char wrkbuf[1024];
-   char* RECM_PGBIN=getenv (ENVIRONMENT_RECM_PGBIN);
-   if (RECM_PGBIN == NULL)
-   {
-      if ((fp = popen("which pg_ctl || find / -name pg_ctl 2>/dev/null|head -1", "r")) == NULL) return rc;
-      buf[0]=0x00;
-      stop=0;
-      while (stop == 0 && fgets(buf, 1024, fp) != NULL) 
-      {
-         if (strstr(buf,"/pg_ctl") != NULL) stop++; 
-      }
-      
-      if (pclose(fp)) return 0;
-      TRACE("Found pg_ctl:%s\n",buf);
-      char *x=strchr(&buf[0],'\n');
-      if (x != NULL) x[0]=0x00;
-      if (strlen(buf) == 0) return rc;
-   }
-   else
-   {
-      sprintf(buf,"%s/pg_ctl",RECM_PGBIN);
-   }
-   sprintf(wrkbuf,"%s --version|awk '{print $3}'|cut -d. -f1",buf);
-   if ((fp = popen(wrkbuf, "r")) == NULL) return rc;
-   buf[0]=0x00;
-   stop=0;
-   while (stop == 0 && fgets(buf, 1024, fp) != NULL) 
-   {
-      if (strlen(buf) > 0) stop++;
-   }
-   if (pclose(fp)) return rc;
-   rc=atoi(buf);
-   TRACE("ARGS(none) [buf='%s'] --> RETURN (int) %d\n",buf,rc);
-   return rc;
-}
 
 // Find pg_ctl program
 char *pg_ctl_locate()
@@ -2325,7 +2536,7 @@ char *pg_ctl_locate()
 //********************************************************************************
 // Above version 11,  we use 'postgresql.auto.conf' file
 //********************************************************************************
-void pgAddRecoveryParameters(const char *directory,const char *WALdir,const char *methode,const char *restore_date,int WalIsCompressed,int isInclusive)
+void pgAddRecoveryParameters(const char *directory,const char *WALdir,const char *methode,const char *restore_date,int WalIsCompressed,int isInclusive,int isPaused)
 {
    TRACE("ARGS(directory='%s' WALdir='%s' methode='%s' restore_date='%s')\n",directory,WALdir,methode,restore_date);   
    char *autoFileName=malloc(1024);
@@ -2375,7 +2586,8 @@ void pgAddRecoveryParameters(const char *directory,const char *WALdir,const char
    };
    fprintf(fW,"%s='%s'\n",methode,restore_date);
    TRACE("%s='%s'\n",methode,restore_date);
-   fprintf(fW,"recovery_target_action = 'promote'\n");
+   if (isPaused == true) { fprintf(fW,"recovery_target_action = 'pause'\n"); }
+                    else { fprintf(fW,"recovery_target_action = 'promote'\n"); };
    if (isInclusive == true) { fprintf(fW,"recovery_target_inclusive = true\n"); }
                        else { fprintf(fW,"recovery_target_inclusive = false\n"); }
    fclose(fW);
@@ -2384,7 +2596,30 @@ void pgAddRecoveryParameters(const char *directory,const char *WALdir,const char
    free(autoFileName);
 }
 
-
+//********************************************************************************
+// Above version 11,  we use 'postgresql.auto.conf' file
+//********************************************************************************
+char *autocompleteUID(int cluster_id,const char *uid)
+{
+   static char result[128];
+   char query[255];
+   sprintf(query,"select count(*) from %s.backups where cid=%d and bck_id like '%%%s'",varGet(GVAR_DEPUSER),cluster_id,uid);
+   int rows=DEPOquery(query,0);
+   rows=DEPOgetInt(0,0);
+   DEPOqueryEnd();
+   if (rows == 1) { sprintf(query,"select bck_id from %s.backups where cid=%d and bck_id like '%%%s'",varGet(GVAR_DEPUSER),cluster_id,uid);
+                    rows=DEPOquery(query,0);
+                    strcpy(result,DEPOgetString(0,0));
+                    DEPOqueryEnd();
+                  }
+             else { sprintf(query,"select array_to_string(array_agg(bck_id),',') from %s.backups where cid=%d and bck_id like '%%%s'",varGet(GVAR_DEPUSER),cluster_id,uid);
+                    rows=DEPOquery(query,0);
+                    INFO("Non unique UID. Found '%s'\n",DEPOgetString(0,0));
+                    DEPOqueryEnd();
+                    return(NULL);
+                  };
+   return(&result[0]);
+}
 
 //********************************************************************************
 // Above version 11,  we use 'postgresql.auto.conf' file
@@ -2423,6 +2658,7 @@ void pgAddRecoveryParametersForStandby(int cluster_id,const char *directory,cons
                        varGet(GVAR_DEPUSER),
                        cluster_id);
    int rows=DEPOquery(query,0);
+   TRACE("[rc=%d]\n",rows);
    char *conn_opts=malloc(1024);
    if (strcmp(DEPOgetString(0,4),"(none)") == 0) { conn_opts[0]=0x00; }
                                             else { sprintf(conn_opts,"options=%s",asLiteral(DEPOgetString(0,4))); };
@@ -2520,10 +2756,7 @@ char *buildFileName(const char *fn,const char *defNam)
    return(newf);
 }
 
-
-#include "recm_zip.h"
-
-
+/* At abort exit */
 void intHandler(int dummy) 
 {
     struct termios info;
@@ -2538,6 +2771,22 @@ void intHandler(int dummy)
     info.c_cc[VTIME] = 0;                     /* no timeout */
     tcsetattr(STDOUT_FILENO, TCSANOW, &info); /* set immediately */
     exit(1);
+}
+
+/* at normal exit */
+void exitHandler()
+{
+    struct termios info;
+    tcgetattr(STDOUT_FILENO, &info);          /* get current terminal attirbutes; 0 is the file descriptor for stdin */
+    info.c_lflag = info.c_lflag ^ICANON;                  /* disable canonical mode */
+    info.c_cc[VMIN] = 0;                      /* wait until at least one keystroke available */
+    info.c_cc[VTIME] = 0;                     /* no timeout */
+    tcsetattr(STDOUT_FILENO, TCSANOW, &info); /* set immediately */
+    tcgetattr(STDOUT_FILENO, &info);          /* get current terminal attirbutes; 0 is the file descriptor for stdin */
+    info.c_lflag = info.c_lflag ^ ECHO;                    /* disable echo */
+    info.c_cc[VMIN] = 0;                      /* wait until at least one keystroke available */
+    info.c_cc[VTIME] = 0;                     /* no timeout */
+    tcsetattr(STDOUT_FILENO, TCSANOW, &info); /* set immediately */
 }
 
 static Array *historic=NULL;
@@ -2632,7 +2881,6 @@ void hstLoad()
    FILE *Hw=fopen(hstFile, "r");
    if (Hw == NULL) return;
    char* line=malloc(1024);
-   int i=1;
    while (fgets(line, 1024, Hw) != NULL)
    {
       if (strlen(line) == 0)  continue;
@@ -2660,10 +2908,7 @@ char * readFromKeyboard(const char *pprompt)
     char *pspaces;
     char *pbuf;
     char *tmpv;
-    char *dst;
-    char *src;
-    char *xdst;
-    char *xsrc;
+
     int max_cursor=0;
     int max_length=0;
     int cursor=0;
@@ -2671,7 +2916,6 @@ char * readFromKeyboard(const char *pprompt)
     int ch;
     int ESCAPE=0;
     int INSERTION=1;
-    ArrayItem *curLine=NULL;
     ch=0x20;
     memset(buffer,0,2048);
     memset(spaces,' ',2048);
@@ -3326,7 +3570,6 @@ void displayDuplicateKeywords(const char *keywords,const char *keyword,char deli
 
 int extract_command(const char *command_line)
 {
-//   TRACE("ARGS: none\n");
    int is_help=0;
    char *s=(char *) command_line;
    static char *response=NULL;
@@ -3335,10 +3578,8 @@ int extract_command(const char *command_line)
    int c=' ';
    int pc=' ';
    r[0]=0x00;
-   int minus_count=0;
    while (s[0] != 0x00 && s[0] != '/')
    {
-//      printf("cmd='%s' '%c'\n",response,c);
       pc=c;
       c=s[0];
       if (c == '\t') c=' ';
@@ -3360,21 +3601,6 @@ int extract_command(const char *command_line)
    char *lspace=r;lspace--;
    while (lspace[0] == ' ' || lspace[0] == '-') { lspace[0]=0x00;lspace--; };
    int id=0;
-//   TRACE("lspace=%s\n",lspace);
-//   TRACE ("response='%s'\n",response);
-   
-/*
-int xx=0;
-   while (xx < 4) 
-   { 
-      printf("res=<%s>\n",extractCommandSegment(response,xx));
-      xx++; 
-   };
-*/
-
-   //int hsh=strcmpCommand(response,"none");
-//   printf("(B)\n");
-//   while (recm_commands[id].id != 0 && strcmp(response,recm_commands[id].cmd) != 0) { id++; };
    int rccmp=strcmpCommand(response,recm_commands[id].cmd);
    while (recm_commands[id].id != 0 && rccmp != true)
    {
@@ -3384,7 +3610,6 @@ int xx=0;
    if (recm_commands[id].id != 0)
    {
       // reset all options for this command ------------------------------------
-//      TRACE("reset all options (OPTIONS)\n");
       if (recm_commands[id].opt != NULL)
       {
          char *optp=strdup(recm_commands[id].opt);
@@ -3396,10 +3621,7 @@ int xx=0;
             virgule[0]=0x00;
             char *opt_name=malloc(strlen(opt)+10);
             sprintf(opt_name,"opt_%s",++opt);
-            //TRACE("opt_name=%s\n",opt_name);
             strToLower(opt_name);
-            //TRACE("Lower case opt_name=%s\n",opt_name);
-//            varAdd(opt_name,VAR_UNSET_VALUE); OPTION_UNSET_VALUE
             UNSETOption(opt_name);
             free(opt_name);
             opt=virgule;
@@ -3408,17 +3630,12 @@ int xx=0;
          };
          free(optp);
       };
-      //TRACE("reset all qualifiers\n");
-      // reset all qualfiers for this command ----------------------------------
-      //TRACE("reset all qualifiers\n");
       if (recm_commands[id].qal != NULL)
       {
          char *qalp=strdup(recm_commands[id].qal);
          char *qal=qalp;
-         //TRACE("qalp='%s' qal='%s'\n",qalp,qal);
          qal++;           // Sikp first comma 
          char *virgule=strchr(qal,',');
-         //TRACE("QALS=%s virgule='%s'\n",qalp,virgule);
          while (virgule != NULL)
          {
             virgule[0]=0x00;
@@ -3507,7 +3724,6 @@ int xx=0;
             SETOption(opt_name);
             free(opt_name);
             char *ns=slash;ns+=strlen(keyword);
-            //TRACE("Option slash='%s' + len()='%s'\n",slash,ns);
          };
          if (in_qualifier != NULL) 
          {
@@ -3518,9 +3734,7 @@ int xx=0;
             if (val == NULL) return (-1);
             char *qal_name=malloc(128);
             char *tmpnam=getFullKeyword(recm_commands[id].qal,keyword_v,'=');   // keyword start always by a '/'
-            //TRACE("tmpnam='%s'\n",tmpnam);
             tmpnam++;
-            //TRACE("tmpnam='%s'\n",tmpnam);
             sprintf(qal_name,"qal_%s",tmpnam);
             
             strToLower(qal_name);
@@ -3528,7 +3742,6 @@ int xx=0;
             free(qal_name);
             
             char *ns=slash;ns+=strlen(keyword);
-            //TRACE("Qual slash='%s' + len()='%s'\n",slash,ns);
          }
          free(keyword_e);
          free(keyword_v);
@@ -3567,7 +3780,6 @@ int xx=0;
             if (strchr(equal,'M') != NULL && strcmp(varGet(qal_name),QAL_UNSET) == 0) 
             {
                ERROR(ERR_MISQUALVAL,"Mandatory Qualifier '/%s' require a value.\n",qal); 
-               //printf ("ERROR - MISSING MANDATORY Qualifier '%s'\n",qal); 
                showHelp(id,0);
                return(-1);
             };
@@ -3608,15 +3820,100 @@ void prepareConnectString(char *connectString,const char *pdb,const char *pusr,c
    TRACE("ARGS(connectString='%s' pdb='%s' pusr='%s' ppwd='%s' phst='%s' pport=%s) --> RETURN (string) '%s'\n",connectString,pdb,pusr,ppwd,phst,pport,connectString);
 }
 
+int DEPOloadData()
+{
+   if (varGetLong(GVAR_CLUCID) == 0) return(false);   
+
+   char *query=malloc(1024);
+   int rows;
+   sprintf(query,"select clu_info from %s.clusters where cid=%s",
+                 varGet(GVAR_DEPUSER),
+                 varGet(GVAR_CLUCID));
+   rows=DEPOquery(query,0);
+   if (rows != 1)
+   {
+      DEPOqueryEnd();
+      free(query);
+      return(false);
+   }
+   varAdd(GVAR_CLUDESCR,DEPOgetString(0,0));
+   DEPOqueryEnd();
+   globalArgs.configChanged=1;
+   SaveConfigFile("CLU",varGet(GVAR_CLUNAME),SECTION_CLUSTER);
+//   SaveConfigFile(varGet(GVAR_DEPNAME),SECTION_DEPOSIT);
+   free(query);
+   return(true);
+}
+
+
+/********************************************************************************/
+/* Check Deposit Version                                                        */
+/********************************************************************************/
+int DEPOCheckState()
+{
+   char *query=malloc(1024);
+   sprintf(query,"select count(*) from %s.clusters where cid=%ld",
+                 varGet(GVAR_DEPUSER),
+                 varGetLong(GVAR_CLUCID));
+   int rows=DEPOquery(query,0);
+   if (rows == -1)
+   {
+      ERROR(ERR_NOTDEPOSIT,"Not connected to a DEPOSIT.\n");
+      DEPOqueryEnd();
+      free(query);
+      return(false);
+   }
+   if (rows == 1 && DEPOgetLong(0,0) == 0)
+   {
+      ERROR(ERR_NOTREGISTERED,"Not registerd on this deposit. Use 'register cluster' command.\n");
+      varAdd(GVAR_CLUCID,"0");
+      DEPOqueryEnd();
+      free(query);
+      return(false);
+   }
+   if (DEPOloadData() == false)
+   {
+      ERROR(ERR_NOTREGISTERED,"Invalid CID %ld. Not registerd any more on this deposit. Use 'register cluster' command.\n",varGetLong(GVAR_CLUCID));
+      varAdd(GVAR_CLUCID,"0");
+      DEPOqueryEnd();
+      free(query);
+      return(false);
+   };
+   DEPOqueryEnd();
+   INFO("Registered to '%s' (CID=%ld)\n",varGet(GVAR_REGDEPO),varGetLong(GVAR_CLUCID));
+   
+   /* We need to check if the cluster name is the same...The name of the DEPOSIT is the right one. */
+   sprintf(query,"select clu_nam from %s.clusters where cid=%ld",
+                 varGet(GVAR_DEPUSER),
+                 varGetLong(GVAR_CLUCID));
+   rows=DEPOquery(query,0);
+   if (strcmp(DEPOgetString(0,0),varGet(GVAR_CLUNAME)) != 0)
+   {
+      WARN(WRN_CHANGEDNAME,"Your cluster is named '%s'.  It is registered under the name '%s'. \n",
+                           varGet(GVAR_CLUNAME),
+                           DEPOgetString(0,0));
+   }
+   DEPOqueryEnd();
+
+   /* We need to validate the RECM version and the DEPOSIT one. */
+   sprintf(query,"select version from %s.config",varGet(GVAR_DEPUSER));
+   rows=DEPOquery(query,0);
+   if (rows == 1 && strcmp(DEPOgetString(0,0),CURRENT_VERSION) != 0)
+   {
+      WARN(WRN_BADVERSION,"DEPOSIT is not at same version as RECM is.  Invoke 'upgrade' to upgrade your deposit\n");
+   };
+   DEPOqueryEnd();
+   free(query);
+   return(true);
+}
+
+
 /********************************************************************************/
 /* Deposit Query routines                                                       */
 /* open connection to the database                                              */
 /********************************************************************************/
 int DEPOconnect(const char *pdb,const char *pusr,const char *ppwd,const char *phst,const char *pport )
 {
-   
-   int  nFields;
-   char *wrkstr=malloc(128);
    char *connectString=malloc(1024);
    connectString[0]=0x00;
    prepareConnectString(connectString,pdb,pusr,ppwd,phst,pport);
@@ -3727,9 +4024,11 @@ int DEPOgetInt(int row,int col)
    }
 }
 
-int DEPOisConnected()
+int DEPOisConnected(int showMessage)
 {
-   return( rep_cnx != NULL);
+   int res=( rep_cnx != NULL);
+   if (res == false && showMessage==true) ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
+   return(res);
 }
 
 // Number of rows affected
@@ -3818,15 +4117,15 @@ char *DisplayElapsed(long seconds)
    if (res == NULL) res=malloc(60);
    if (seconds > 3600) phrs=(seconds / 3600);
    if (seconds > 60) pmin=((seconds - (phrs * 3600)) / 60);
-   psec= seconds - ((phrs * 3600) + (pmin*60));
+   psec=seconds - ((phrs * 3600) + (pmin*60));
    if (phrs > 0) 
-   { sprintf(res,"%2ldh%02ld:%0ld",phrs,pmin,psec); }
+   { sprintf(res,"%2ldh%02ld:%02ld",phrs,pmin,psec); }
    else
    {
       if (pmin > 0)
-      { sprintf(res,"0h%02ld:%0ld",pmin,psec);}
+      { sprintf(res,"0h%02ld:%02ld",pmin,psec);}
       else 
-      { sprintf(res,"%lds",psec); };
+      { sprintf(res,"%02lds",psec); };
    }
    return(res);
 }
@@ -3927,21 +4226,16 @@ void CLUdisconnect()
    varDel(GVAR_REGDEPO);
 }
 
-int CLUisConnected()
+/********************************************************************************/
+/* Verify a CLUSTER is connected.                                               */
+/********************************************************************************/
+int CLUisConnected(int showMessage)
 {
-   int rc=clu_cnx != NULL;
+   int rc=(clu_cnx != NULL);
+   if (rc == false && showMessage==true) ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
    TRACE("ARGS(none) return (int) %d\n",rc);
    return(rc);
 }
-
-int isClusterConnected()
-{
-   int rc=clu_cnx != NULL;
-   TRACE("ARGS(none) return (int) %d\n",rc);
-   return(rc);
-}
-
-
 
 char *CLUgetErrorMessage()
 {
@@ -4009,8 +4303,7 @@ int CLUquery(const char *query,int with_retry);
 int CLUconnect(const char *pdb,const char *pusr,const char *ppwd,const char *phst,const char *pport )
 {
    TRACE("ARGS: pdb='%s' pusr:'%s' ppwd:'%s' phst:'%s' pport:'%s'\n",pdb,pusr,ppwd,phst,pport);
-   int  nFields;
-   char *wrkstr=malloc(128);
+   //char *wrkstr=malloc(128);
    char *connectString=malloc(1024);
    prepareConnectString(connectString,pdb,pusr,ppwd,phst,pport);
    clu_cnx = PQconnectdb(connectString);
@@ -4195,8 +4488,6 @@ int AUXquery(const char *query,int with_retry);
 int AUXconnect(const char *pdb,const char *pusr,const char *ppwd,const char *phst,const char *pport )
 {
    TRACE("ARGS: pdb='%s' pusr='%s' ppwd='%s' phst='%s' pport='%s'\n",pdb,pusr,ppwd,phst,pport);
-   int  nFields;
-   char *wrkstr=malloc(128);
    char *connectString=malloc(1024);
    prepareConnectString(connectString,pdb,pusr,ppwd,phst,pport);
    aux_cnx = PQconnectdb(connectString);
@@ -4219,7 +4510,7 @@ int AUXconnect(const char *pdb,const char *pusr,const char *ppwd,const char *phs
    TRACE("GVAR_AUXNAME=%s\n",AUXgetString(0,0));
    varAdd(GVAR_AUXNAME,AUXgetString(0,0));
    AUXqueryEnd();
-   VERBOSE("AUXILIARY Connected.\n");
+   TRACE("AUXILIARY Connected.\n");
    if (pdb != NULL && strcmp(pdb,VAR_UNSET_VALUE) != 0)     { varAdd(GVAR_AUXDB,pdb); } 
                                                        else { varAdd(GVAR_AUXDB,VAR_UNSET_VALUE); };
 
@@ -4546,50 +4837,6 @@ int validRetention(char *pbuffer)
 }
 
 
-//********************************************************************************
-// Read Postgresql Version without connecting the engine (read PG_VERSION file)
-//********************************************************************************
-int pgGetVersion()
-{
-   static int postgreSQL_version=-1;
-   /*
-   if Cluster is not connected, we don't have the 'PGATA' information
-   */
-   
-   if (clu_cnx != NULL) postgreSQL_version=-1;
-   if (postgreSQL_version != -1) return(postgreSQL_version);
-
-   if (clu_cnx == NULL)
-   {
-      postgreSQL_version=pg_binaryVersion();
-   }
-   else
-   {
-      char *buffer=malloc(1024);
-      sprintf(buffer,"%s/PG_VERSION",varGet(GVAR_CLUPGDATA));
-      FILE *fh=fopen(buffer, "r");
-      if (fh != NULL)
-      {
-         fgets(buffer, 1023, fh);
-         postgreSQL_version=atoi(buffer);
-         fclose(fh);
-      }
-      else
-      {
-         if (clu_cnx != NULL)
-         {
-            int rc_tl=CLUquery("select split_part(split_part(version(),' ',2),'.',1)",0);
-            postgreSQL_version=CLUgetInt(0,0);
-            CLUqueryEnd();
-         }
-      }
-      free(buffer);
-   }
-   TRACE("ARGS(none) --> RETURN (int) %d\n",postgreSQL_version);
-   return(postgreSQL_version);
-}
-
-
 void cluster_doSwitchWAL(int chkpt)
 {
    TRACE("ARGS(chkpt %d)\n",chkpt);
@@ -4612,7 +4859,7 @@ void cluster_doSwitchWAL(int chkpt)
    VERBOSE("Invoking switch WAL (%s)\n",LSN);
    CLUqueryEnd();
    varAdd(SYSVAR_LASTLSN,LSN);
-};
+}
 
 void cluster_getCurrentWAL()
 {
@@ -4668,26 +4915,30 @@ void CLUloadDepositOptions(long cluster_id)
                        " opt_waldir,   "
                        " opt_bkpdir,   "
                        " opt_concurindex,"
-                       " clu_addr"
+                       " clu_addr,"
+                       " opt_maxwsize,  "
+                       " opt_maxwfiles"
                  " from %s.clusters where cid=%ld",
                  varGet(GVAR_DEPUSER),cluster_id);
    int rows=DEPOquery(query,0);
    //printf("query=%s\nrc=%d\n",query,rows);
    if (rows == 1)
    {
-      varAdd(GVAR_CLUAUTODELWAL,       DEPOgetString(0, 0));    // opt_delwal
-      varAdd(GVAR_CLUREADBLOCKSIZE,    DEPOgetString(0, 1));  // opt_blksize
-      varAdd(GVAR_COMPLEVEL,           DEPOgetString(0, 2));  // opt_compress
-      varAdd(GVAR_CLURETENTION_FULL,   DEPOgetString(0, 3));  // opt_full
-      varAdd(GVAR_CLURETENTION_META,   DEPOgetString(0, 4));  // opt_meta
-      varAdd(GVAR_CLURETENTION_CONFIG, DEPOgetString(0, 5));  // opt_cfg
-      varAdd(GVAR_CLUBACKUP_MAXSIZE,   DEPOgetString(0, 6));  // opt_maxsize
-      varAdd(GVAR_CLUBACKUP_MAXFILES,  DEPOgetString(0, 7));  // opt_maxfiles
-      varAdd(GVAR_CLUDATE_FORMAT,      DEPOgetString(0, 8));  // opt_datfmt
-      varAdd(GVAR_WALDIR,              DEPOgetString(0, 9));  // opt_waldir
-      varAdd(GVAR_BACKUPDIR,           DEPOgetString(0,10));  // opt_bckdir
-      varAdd(GVAR_REINDEXCONCURRENTLY, DEPOgetString(0,11));  // opt_reindex
-      varAdd(GVAR_CLUIP,               DEPOgetString(0,12));  // clu_addr
+      varAdd(GVAR_CLUAUTODELWAL,        DEPOgetString(0, 0));    // opt_delwal
+      varAdd(GVAR_CLUREADBLOCKSIZE,     DEPOgetString(0, 1));  // opt_blksize
+      varAdd(GVAR_COMPLEVEL,            DEPOgetString(0, 2));  // opt_compress
+      varAdd(GVAR_CLURETENTION_FULL,    DEPOgetString(0, 3));  // opt_full
+      varAdd(GVAR_CLURETENTION_META,    DEPOgetString(0, 4));  // opt_meta
+      varAdd(GVAR_CLURETENTION_CONFIG,  DEPOgetString(0, 5));  // opt_cfg
+      varAdd(GVAR_CLUBACKUP_MAXSIZE,    DEPOgetString(0, 6));  // opt_maxsize
+      varAdd(GVAR_CLUBACKUP_MAXFILES,   DEPOgetString(0, 7));  // opt_maxfiles
+      varAdd(GVAR_CLUDATE_FORMAT,       DEPOgetString(0, 8));  // opt_datfmt
+      varAdd(GVAR_WALDIR,               DEPOgetString(0, 9));  // opt_waldir
+      varAdd(GVAR_BACKUPDIR,            DEPOgetString(0,10));  // opt_bckdir
+      varAdd(GVAR_REINDEXCONCURRENTLY,  DEPOgetString(0,11));  // opt_reindex
+      varAdd(GVAR_CLUIP,                DEPOgetString(0,12));  // clu_addr
+      varAdd(GVAR_CLUBACKUP_MAXWALSIZE, DEPOgetString(0,13));  // maxwalsize
+      varAdd(GVAR_CLUBACKUP_MAXWALFILES,DEPOgetString(0,14));  // maxwalfiles
    }
    DEPOqueryEnd();
 }
@@ -4750,17 +5001,6 @@ int isConnectedAndRegistered()
    return(true);
 }
 
-int isDepositConnected()
-{
-   if (rep_cnx == NULL)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return(false);
-   };
-   TRACE("ARGS(none) -- RETURN (int) true\n");
-   return(true);
-}
-
 //********************************************************************************
 // Read current TIMELINE if engine is running, otherwise return -1
 //********************************************************************************
@@ -4771,7 +5011,8 @@ long pgGetCurrentTimeline()
    if (clu_cnx != NULL)
    {
       int rc_tl=CLUquery("SELECT timeline_id FROM pg_control_checkpoint()",0);
-      TL=CLUgetLong(0,0);
+      if (rc_tl == 1) { TL=CLUgetLong(0,0); }
+                 else { TL=-1; };
       CLUqueryEnd();
    }
    TRACE(" --> RETURN (long) %ld\n",TL);
@@ -4888,8 +5129,9 @@ void COMMAND_SHOWVARIABLE(int idcmd,char *command_line)
 void COMMAND_DEBUG(int idcmd,char *command_line)
 {
    int done=0;
-   if (optionIsSET("opt_on"))  { globalArgs.debug=true; done++; };
-   if (optionIsSET("opt_off")) { globalArgs.debug=false; done++; };
+   
+   if (optionIsSET("opt_on"))  { globalArgs.debug=true;  globalArgs.verbosity_bd=globalArgs.verbosity; done++; };                  // Keep verbosity state
+   if (optionIsSET("opt_off")) { globalArgs.debug=false; globalArgs.verbosity=globalArgs.verbosity_bd; done++; };                  // Restore verbosity state
    if (done == 0) { printf ("debug is '%d'\n",globalArgs.debug); };
    if (qualifierIsUNSET("qal_file") == false && globalArgs.debug == true)
    {
@@ -4944,6 +5186,8 @@ void COMMAND_CLRSCR(int idcmd,char *command_line)
    system("clear");
 }
 
+#include "recm_zip.h"
+
 // Command CMD_SQL
 #include "recm_sql.h"
 
@@ -4970,7 +5214,7 @@ void COMMAND_CLRSCR(int idcmd,char *command_line)
 // Command CMD_RESTOREFULL
 //#include "recm_restorefull.h"
 
-/// Command CMD_DUPLICATEPARTIAL
+// Command CMD_DUPLICATEPARTIAL
 #include "recm_duplicatepartial.h"
       
 //Command CMD_BACKUPCFG
@@ -5009,15 +5253,6 @@ void COMMAND_CLRSCR(int idcmd,char *command_line)
 //Command CMD_SHOWCONFIG,CMD_SETCONFIG
 #include "recm_showconfig.h"
 
-//Command CMD_SHOWDEPOSIT,
-#include "recm_showdepo.h"
-
-// Command CMD_CREATEDEPOSIT
-#include "recm_credeposit.h"
-
-// Command CMD_UPGRADEDEPOSIT
-//#include "recm_upgdeposit.h"
-
 // Command CMD_CREATERP
 #include "recm_createrp.h"
 
@@ -5031,6 +5266,17 @@ void COMMAND_CLRSCR(int idcmd,char *command_line)
 
 #include "recm_cnxdepo.h"
 
+#include "recm_usage.h"
+
+//Command CMD_SHOWDEPOSIT,
+#include "recm_showdepo.h"
+
+// Command CMD_CREATEDEPOSIT
+#include "recm_credeposit.h"
+
+// Command CMD_UPGRADEDEPOSIT
+#include "recm_upgdeposit.h"
+
 // Command CMD_SHOWCLUSTER
 #include "recm_showcluster.h"
 
@@ -5038,13 +5284,19 @@ void COMMAND_CLRSCR(int idcmd,char *command_line)
 #include "recm_verifybackup.h"
 
 //Command CMD_BACKUPFULL
-#include "recm_backupful.h"
+#include "recm_backupfull.h"
 
 //Command CMD_BACKUPMETA
 #include "recm_backupmeta.h"
 
 //Command CMD_SWITCHWAL
 #include "recm_switchwal.h"
+
+//Command CMD_LISTMAPPING
+#include "recm_listmapping.h"
+
+//Command CMD_DELMAPPING
+#include "recm_delmapping.h"
 
 //Command CMD_REGFILE
 #include "recm_regfiles.h"
@@ -5053,32 +5305,7 @@ void COMMAND_CLRSCR(int idcmd,char *command_line)
 #include "recm_reload.h"
 #include "recm_save.h"
 #include "recm_setsource.h"
-
-int DEPOloadData()
-{
-   if (varGetLong(GVAR_CLUCID) == 0) return(false);   
-
-   char *query=malloc(1024);
-   int rows;
-   sprintf(query,"select clu_info from %s.clusters where cid=%s",
-                 varGet(GVAR_DEPUSER),
-                 varGet(GVAR_CLUCID));
-   rows=DEPOquery(query,0);
-   if (rows != 1)
-   {
-      DEPOqueryEnd();
-      free(query);
-      return(false);
-   }
-   varAdd(GVAR_CLUDESCR,DEPOgetString(0,0));
-   DEPOqueryEnd();
-   globalArgs.configChanged=1;
-   SaveConfigFile("CLU",varGet(GVAR_CLUNAME),SECTION_CLUSTER);
-//   SaveConfigFile(varGet(GVAR_DEPNAME),SECTION_DEPOSIT);
-   free(query);
-   return(true);
-}
-
+#include "recm_setmapping.h"
 
 void CLUloadData()
 {
@@ -5120,28 +5347,64 @@ void CLUloadData()
 //CMD_STATUS
 void COMMAND_STATUS(int idcmd,const char *command_line)
 {
-   printf("RECM Version : %s\n",varGet(RECM_VERSION));
-
-   if (DEPOisConnected())
+   char DEPO_version[20];
+   memset(DEPO_version,0x00,20);
+   char flg[10];
+   if (IsClusterEnabled(varGetLong(GVAR_CLUCID)) == false) { strcpy(flg,"DISABLED");} 
+                                                      else { strcpy(flg,"ENABLED"); };
+   if (CLUisConnected(false))  
    {
+       printf ("Cluster: CONNECTED  Name='%s'  CID=%ld  state=%s\n",varGet(GVAR_CLUNAME),varGetLong(GVAR_CLUCID),flg); 
+       printf ("\tVersion : %s\n",varGet(RECM_VERSION));
+   
+   }
+   else 
+   {
+      printf ("Cluster: NOT CONNECTED.\n");
+   };
+   if (DEPOisConnected(false))
+   { 
+      printf ("Deposit: CONNECTED  Name='%s'\n",varGet(GVAR_REGDEPO));
       char *query=malloc(1024);
       sprintf(query,"select version,description,to_char(created,'%s'),to_char(updated,'%s') from %s.config",
                     varGet(GVAR_CLUDATE_FORMAT),
                     varGet(GVAR_CLUDATE_FORMAT),
                     varGet(GVAR_DEPUSER));
       int rows=DEPOquery(query,0);
-      printf("   DEPOSIT Version : %s - %s (Created '%s' )\n",DEPOgetString(0,0),DEPOgetString(0,1),DEPOgetString(0,2));
+      TRACE("[rc=%d]\n",rows);
+      
+      strcpy(DEPO_version,DEPOgetString(0,0));
+      printf("\tVersion : %s\t( %s )\n",DEPO_version,DEPOgetString(0,1));
+      printf("\tLast update '%s' ( created '%s')\n",DEPOgetString(0,3),DEPOgetString(0,2));
       DEPOqueryEnd();
-      free(query);
+      free(query);      
    }
-   char flg[10];
-   if (IsClusterEnabled(varGetLong(GVAR_CLUCID)) == false) { strcpy(flg,"DISABLED");} 
-                                                      else { strcpy(flg,"ENABLED"); };
-   if (CLUisConnected())  { printf ("   Cluster: CONNECTED  Name='%s'  CID=%ld  state=%s\n",varGet(GVAR_CLUNAME),varGetLong(GVAR_CLUCID),flg); }
-                     else { printf ("   Cluster: NOT CONNECTED.\n");};
-   if (DEPOisConnected()) { printf ("   Deposit: CONNECTED  Name='%s'\n",varGet(GVAR_REGDEPO)); }
-                     else { printf ("   Deposit: NOT CONNECTED.\n");};
-                     
+   else
+   {
+      printf ("Deposit: NOT CONNECTED.\n");
+   };
+   if (strcmp(DEPO_version,CURRENT_VERSION) != 0)
+   {
+      ERROR(ERR_BADDEPOVER,"DEPOSIT is not at same version as RECM is.  Invoke 'upgrade' to upgrade your deposit\n");
+   }
+/*
+   char *wrkstr;
+   int first=0;
+   wrkstr=getenv(ENVIRONMENT_RECM_META_DIR);
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_METADIR='%s'\n",wrkstr);};
+   wrkstr=getenv(ENVIRONMENT_RECM_CONFIG    );
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_CONFIG='%s'\n",wrkstr);};
+   wrkstr=getenv(ENVIRONMENT_RECM_PGBIN                 );
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_PGBIN='%s'\n",wrkstr);};
+   wrkstr=getenv(ENVIRONMENT_RECM_PGBIN           );
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_METADIR='%s'\n",wrkstr);};
+   wrkstr=getenv(ENVIRONMENT_RECM_WALCOMP_EXT     );
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_WALC_EXT='%s'\n",wrkstr);};
+   wrkstr=getenv(ENVIRONMENT_RECM_RESTORE_COMMAND );
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_RESTORE_COMMAND='%s'\n",wrkstr);};
+   wrkstr=getenv(ENVIRONMENT_RECM_COMPRESS_METHOD );
+   if (wrkstr != NULL) { if (first==0) {printf ("Environment variables:\n"); first++;};printf ("\t- RECM_COMPRESS_METHOD='%s'\n",wrkstr);};
+*/   
 }
 
 void COMMAND_CONNECTTARGET(int idcmd,const char *command_line)
@@ -5177,51 +5440,8 @@ void COMMAND_CONNECTTARGET(int idcmd,const char *command_line)
                             varGet(GVAR_DEPHOST),
                             varGet(GVAR_DEPPORT)) == true)
             {
-               char *query=malloc(1024);
-               sprintf(query,"select count(*) from %s.clusters where cid=%ld",
-                                  varGet(GVAR_DEPUSER),
-                                  varGetLong(GVAR_CLUCID));
-               int rows=DEPOquery(query,0);
-               if (rows == -1)
-               {
-                  ERROR(ERR_NOTDEPOSIT,"Not connected to a DEPOSIT.\n");
-                  DEPOqueryEnd();
-                  free(query);
-                  return;
-               }
-               if (rows == 1 && DEPOgetLong(0,0) == 0)
-               {
-                  ERROR(ERR_NOTREGISTERED,"Not registerd on this deposit. Use 'register cluster' command.\n");
-                  varAdd(GVAR_CLUCID,"0");
-                  DEPOqueryEnd();
-                  free(query);
-                  return;
-               }
-               if (DEPOloadData() == false)
-               {
-                  ERROR(ERR_NOTREGISTERED,"Invalid CID %ld. Not registerd any more on this deposit. Use 'register cluster' command.\n",varGetLong(GVAR_CLUCID));
-                  varAdd(GVAR_CLUCID,"0");
-                  DEPOqueryEnd();
-                  free(query);
-                  return;
-               };
-               DEPOqueryEnd();
-               INFO("Registered to '%s' (CID=%ld)\n",varGet(GVAR_REGDEPO),varGetLong(GVAR_CLUCID));
+               DEPOCheckState();
                CLUloadDepositOptions(varGetLong(GVAR_CLUCID));
-               
-               /* We need to check if the cluster name is the same...The name of the DEPOSIT is the right one. */
-               sprintf(query,"select clu_nam from %s.clusters where cid=%ld",
-                             varGet(GVAR_DEPUSER),
-                             varGetLong(GVAR_CLUCID));
-               rows=DEPOquery(query,0);
-//               printf("DEPOSIT cluname='%s'\n",DEPOgetString(0,0));
-//               printf("GVAR_CLUNAME cluname='%s'\n",varGet(GVAR_CLUNAME));
-               if (strcmp(DEPOgetString(0,0),varGet(GVAR_CLUNAME)) != 0)
-               {
-                  WARN(WRN_CHANGEDNAME,"Your cluster is named '%s'.  It is registered under the name '%s'. \n",varGet(GVAR_CLUNAME),DEPOgetString(0,0));
-               }
-               DEPOqueryEnd();
-               free(query);
             }
          }
          else
@@ -5247,14 +5467,17 @@ void processCommandLine(char *command_line)
           int idcmd=extract_command(cmdl);
           if (idcmd > -1)
           {
-//             TRACE("idcmd=%d\n",idcmd);
+             int saved_verbose=globalArgs.verbosity;                                                                               // Save verbosity before calling command
              switch(recm_commands[idcmd].id)
              {
                 case CMD_QUIT            : ;
                 case CMD_EXIT            : globalArgs.exitRequest=true;
                                            hstSave();
                                            break;
-                case CMD_SETSOURCE       : COMMAND_SETSOURCE            (idcmd,command_line);break;             
+                case CMD_SETSOURCE       : COMMAND_SETSOURCE            (idcmd,command_line);break;
+                case CMD_SETMAPPING      : COMMAND_SETMAPPING           (idcmd,command_line);break;
+                case CMD_LISTMAPPING     : COMMAND_LISTMAPPING          (idcmd,command_line);break;
+                case CMD_DELMAPPING      : COMMAND_DELMAPPING           (idcmd,command_line);break;
                 case CMD_HELP            : COMMAND_HELP                 (idcmd,cmdl);break;
                 case CMD_LISTBACKUP      : COMMAND_LISTBACKUP           (idcmd,command_line);break;
                 case CMD_LISTCLUSTER     : COMMAND_LISTCLUSTER          (idcmd,command_line);break;
@@ -5278,6 +5501,7 @@ void processCommandLine(char *command_line)
                 case CMD_CLRSCR          : COMMAND_CLRSCR               (idcmd,command_line);break;
                 case CMD_SQL             : COMMAND_SQL                  (idcmd,command_line);break;   
                 case CMD_CREATEDEPOSIT   : COMMAND_CREATEDEPOSIT        (idcmd,command_line);break;
+                case CMD_UPGRADEDEPOSIT  : COMMAND_UPGRADEDEPOSIT       (idcmd,command_line);break;
                 case CMD_CREATERP        : COMMAND_CREATERP             (idcmd,command_line);break;
                 case CMD_CNXCLUSTER      : COMMAND_CNXCLUSTER           (idcmd,command_line);break;
                 case CMD_CNXDEPOSIT      : COMMAND_CNXDEPOSIT           (idcmd,command_line);break;
@@ -5309,6 +5533,10 @@ void processCommandLine(char *command_line)
                 default:
                    ERROR(ERR_BADCOMMAND,"Invalid/Incomplete command '%s'\n",command_line);
              }
+             if (recm_commands[idcmd].id != SYS_DEBUG)
+             {
+                globalArgs.verbosity=saved_verbose;                                                                                // Restore verbosity as it was before command
+             };
           }
           else
           {
@@ -5322,29 +5550,6 @@ void processCommandLine(char *command_line)
        cmdl=splitLines(command_line,nr);
     }
 }
-
-
-void ExitApp(int rc)
-{
-    struct termios info;
-    tcgetattr(STDOUT_FILENO, &info);          /* get current terminal attirbutes; 0 is the file descriptor for stdin */
-    info.c_lflag = info.c_lflag ^ICANON;                  /* disable canonical mode */
-    info.c_cc[VMIN] = 0;                      /* wait until at least one keystroke available */
-    info.c_cc[VTIME] = 0;                     /* no timeout */
-    tcsetattr(STDOUT_FILENO, TCSANOW, &info); /* set immediately */
-    tcgetattr(STDOUT_FILENO, &info);          /* get current terminal attirbutes; 0 is the file descriptor for stdin */
-    info.c_lflag = info.c_lflag ^ ECHO;                    /* disable echo */
-    info.c_cc[VMIN] = 0;                      /* wait until at least one keystroke available */
-    info.c_cc[VTIME] = 0;                     /* no timeout */
-    tcsetattr(STDOUT_FILENO, TCSANOW, &info); /* set immediately */
-    if (globalArgs.htrace != NULL) fclose(globalArgs.htrace);
-    globalArgs.htrace=NULL;
-    if (globalArgs.tracefile != NULL) free(globalArgs.tracefile);
-    globalArgs.tracefile=NULL;
-    exit(rc);
-}
-
-#include "recm_usage.h"
   
 static struct option long_options[] = {
         {"help",      no_argument,       0,  'h' },
@@ -5360,8 +5565,6 @@ static struct option long_options[] = {
 int main( int argc, char *argv[] )
 {
    // Main initialization
-   TRACE("Start\n");
- //  if (argc > 0 && strcmp(argv[1],"--version") == 0) { printf("recm (PostgreSQL) %s\n",VERSION); exit(0); };
    memInit();
 #ifdef use_libzip_18
    char* RECM_COMPRESS_METHOD=getenv (ENVIRONMENT_RECM_COMPRESS_METHOD);
@@ -5387,7 +5590,7 @@ int main( int argc, char *argv[] )
     historic=arrayCreate(ARRAY_NO_ORDER);
 
     // Predefined/Initialized variables
-    varAdd(RECM_VERSION,VERSION);
+    varAdd(RECM_VERSION,CURRENT_VERSION);
     varAdd(SYSVAR_DATE_FORMAT,"YYYY-MM-DD HH24:MI:SS");
     varAdd(GVAR_CLUDATE_FORMAT,"YYYY-MM-DD HH24:MI:SS");
     varAdd(SYSVAR_HISTDEEP,"100");
@@ -5422,6 +5625,7 @@ int main( int argc, char *argv[] )
 //    char *pgdata=getenv("PGDATA");if (pgdata != NULL) { varAdd("@PGDATA",pgdata);
 
     signal(SIGINT, intHandler);
+    atexit(exitHandler);
 
     struct termios info;
     tcgetattr(STDOUT_FILENO, &info);          /* get current terminal attirbutes; 0 is the file descriptor for stdin */
@@ -5443,7 +5647,7 @@ int main( int argc, char *argv[] )
         switch( opt )
         { 
             case 'V': display_version();                                        // Display version and exit
-                      ExitApp(0);
+                      exit(0);
                       break;
             case 'v': globalArgs.verbosity = true;                              // Enable verbose mode
                       break;
@@ -5487,29 +5691,9 @@ int main( int argc, char *argv[] )
                                 varGet(GVAR_DEPHOST),
                                 varGet(GVAR_DEPPORT)) == true)
                 {
-                   if (DEPOloadData() == false)
-                   {
-                      ERROR(ERR_NOTREGISTERED,"Invalid CID %ld. Not registerd any more on this deposit. Use 'register cluster' command.\n",varGetLong(GVAR_CLUCID));
-                      varAdd(GVAR_CLUCID,"0");
-                   }
-                   else
-                   {
-                      INFO("Registered to '%s' (CID=%ld)\n",varGet(GVAR_REGDEPO),varGetLong(GVAR_CLUCID));
-                      CLUloadDepositOptions(varGetLong(GVAR_CLUCID));
-                      /* We need to check if the cluster name is the same...The name of the DEPOSIT is the right one. */
-                      char *query=malloc(1024);
-                      sprintf(query,"select clu_nam from %s.clusters where cid=%ld",
-                                         varGet(GVAR_DEPUSER),
-                                         varGetLong(GVAR_CLUCID));
-                      int rows=DEPOquery(query,0);
-                      if (strcmp(DEPOgetString(0,0),varGet(GVAR_CLUNAME)) != 0)
-                      {
-                         WARN(WRN_CHANGEDNAME,"Your cluster is named '%s'.  It is registered under the name '%s'. \n",varGet(GVAR_CLUNAME),DEPOgetString(0,0));
-                      }
-                      DEPOqueryEnd();
-                      free(query);
-                   }
-                }
+                   DEPOCheckState();
+                   CLUloadDepositOptions(varGetLong(GVAR_CLUCID));
+               }
              }
           }
        }
@@ -5527,6 +5711,7 @@ int main( int argc, char *argv[] )
           {
              INFO("Connected to deposit '%s'\n",varGet(SYSVAR_DEPOSIT));
              varAdd(GVAR_CLUCID,"0"); // deposit only mode (for duplicate )
+             DEPOCheckState();
           }
        }
     }
@@ -5538,7 +5723,7 @@ int main( int argc, char *argv[] )
        sprintf(line,"%s;",varGet("@command"));
        processCommandLine(line);
        free(line);
-       ExitApp(0);
+       exit(0);
     }
     index=optind;
     if (index < argc) 
@@ -5548,7 +5733,7 @@ int main( int argc, char *argv[] )
        VERBOSE("Executing file '%s'\n",varGet(SYSVAR_CMDFILE));
        FILE *fh=fopen(varGet(SYSVAR_CMDFILE), "r");
        if (fh == NULL) { ERROR(ERR_FILNOTFND,"File '%s' not found.\n",varGet(SYSVAR_CMDFILE));
-                         ExitApp(1);
+                         exit(1);
                        };
        char * line = malloc(1024);
        while (fgets(line, 1023, fh) != NULL && globalArgs.exitRequest == false)
@@ -5576,6 +5761,6 @@ int main( int argc, char *argv[] )
           }
        }
     }
-    ExitApp(0);
+    exit(0);
 
 }

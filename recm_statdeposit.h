@@ -5,11 +5,7 @@
 /**********************************************************************************/
 void COMMAND_STATDEPOSIT(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false)
-   {
-      WARN(WRN_NOTDEPOSITCNX,"Not connected to any deposit.\n");
-      return;
-   };
+   if (DEPOisConnected(true) == false) return;
 
    memBeginModule();
    char *query=memAlloc(1024);

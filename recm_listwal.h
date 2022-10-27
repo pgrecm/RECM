@@ -12,35 +12,56 @@
 /*            /cid=<CID>      list WALs of an other cluster                       */
 /*            /uid=<UID>      list WALs of a specific backup                      */
 /**********************************************************************************/
+/*
+@command list wal
+@definition
+Display backuped and not backuped WAL files.
+(See {&backup wal&} command for more).
+
+@option "/available"      "list available WAL only"       
+@option "/incomplete"     "list incomplete WAL only"      
+@option "/obsolete"       "list oboslete WAL only"        
+@option "/before=DATE"    "list WALs before a date"       
+@option "/after=DATE"     "list WALs after a date"        
+@option "/cid=CID"        "list WALs of an other cluster" 
+@option "/uid=UID"        "list WALs of a specific backup"
+
+@example
+@inrecm list wal 
+@out List WALs of cluster 'CLU12' (CID=1)
+@out Bck ID                 Status     TL    WAL                       Date                          
+@out ---------------------- ---------- ----- ------------------------- ------------------------------
+@out 000163487668106933d0   AVAILABLE     36 00000024000000730000003A  2022-10-10 12:55:01           
+@out ...
+@out 0001634be3052e3329e8   AVAILABLE     36 000000240000007300000057  2022-10-16 12:52:26           
+@out  + - - - - -------->   AVAILABLE     36 000000240000007300000058  2022-10-16 12:53:04           
+@out 0001634be2931ec906f8   AVAILABLE     36 000000240000007300000058  2022-10-16 12:53:04           
+@out 0001634be3052e3329e8   AVAILABLE     36 000000240000007300000059  2022-10-16 12:55:00           
+@out --- NOT BACKUPED ---   ON DISK       36 00000024000000730000005A  2022-10-16 13:00:00     
+@inrecm
+@end
+ 
+*/
 void COMMAND_LISTWAL(int idcmd,char *command_line)
 {
-   memBeginModule();
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      memEndModule();
-      return;
-   }
-   if ((CLUisConnected() == false) && 
+   if (DEPOisConnected(true) == false) return;
+
+   if ((CLUisConnected(false) == false) && 
        qualifierIsUNSET("qal_source") == true && 
        qualifierIsUNSET("qal_cid") == true)
    {
       ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      memEndModule();
       return;
    };
 
+   memBeginModule();
 
-
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
    
    long cluster_id;
    char *cluster_name=memAlloc(128); 
    
-   if (CLUisConnected() == true)
+   if (CLUisConnected(false) == true)
    {
       if (strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0) cluster_id=varGetLong(GVAR_CLUCID);
       if (strcmp(varGet(GVAR_CLUNAME),VAR_UNSET_VALUE) != 0) strcpy(cluster_name,varGet(GVAR_CLUNAME));
@@ -128,8 +149,9 @@ void COMMAND_LISTWAL(int idcmd,char *command_line)
                  "                              when 4 then 'FAILED' else '?'||b.bcksts end,"
                  "        w.walfile,to_char(w.edate,'%s')"
                  " from %s.backup_wals w,%s.backups b where w.cid=b.cid and w.cid=%ld and w.bck_id=b.bck_id "
-                 " and w.walfile not like '%%.backup%%' "
-                 " and w.walfile not like '%%.history%%'",
+                 " and w.walfile not like '%%.backup' "
+                 " and w.walfile not like '%%.history'"
+                 " and w.walfile not like '%%.partial'",
                     varGet(GVAR_CLUDATE_FORMAT),
                     varGet(GVAR_DEPUSER),
                     varGet(GVAR_DEPUSER),
@@ -138,7 +160,7 @@ void COMMAND_LISTWAL(int idcmd,char *command_line)
    strcat(query,qry_after);
    strcat(query,qry_id);
    strcat(query,qry_sts);
-   strcat(query," order by w.edate");
+   strcat(query," order by w.walfile");
    
    printf("List WALs of cluster '%s' (CID=%ld)\n",cluster_name,cluster_id);
    TRACE ("query:=%s\n",query);
@@ -155,7 +177,7 @@ void COMMAND_LISTWAL(int idcmd,char *command_line)
    {
       strcpy(prev_bckid,bckid);
       strcpy(bckid,DEPOgetString(i,0));
-      if (strstr(curWAL,".backup") == NULL && strstr(curWAL,".history") == NULL) strcpy(prvWAL,curWAL);
+      if (strstr(curWAL,".backup") == NULL && strstr(curWAL,".history") == NULL && strstr(curWAL,".partial") == NULL) strcpy(prvWAL,curWAL);
       strcpy(curWAL,DEPOgetString(i,2));
        char *extension=strchr(curWAL,'.');
       if (extension != NULL) { extension[0]=0x00;};                             // Take care if WAL file is compressed...we remove any extension
@@ -188,6 +210,38 @@ void COMMAND_LISTWAL(int idcmd,char *command_line)
       }
    }
    DEPOqueryEnd();
+   
+   // Now, display all WAL files not yet backuped.
+   char *fullname=memAlloc(1024);
+   struct stat st;
+   int not_backuped=1;
+   while (not_backuped == 1)
+   {
+      prvWAL=ComputeNextWAL(curWAL);
+      strcpy(curWAL,prvWAL);
+      sprintf(fullname,"%s/%s",varGet(GVAR_WALDIR),curWAL);
+      int rc=stat (fullname, &st);
+      char *extension=strchr(curWAL,'.');
+      if (rc != 0 && extension == NULL)
+      {
+         char* RECM_WALCOMP_EXT=getenv (ENVIRONMENT_RECM_WALCOMP_EXT);
+         if (RECM_WALCOMP_EXT == NULL) { strcat(fullname,".gz"); }
+                                  else { strcat(fullname,RECM_WALCOMP_EXT); };
+         rc=stat (fullname, &st);
+      };
+      if (rc == 0) 
+      { 
+         long nTL=getWALtimeline(curWAL);
+         char wrkstr[35];
+         strftime((char *)&wrkstr, 35, "%Y-%m-%d %H:%M:%S", localtime(&st.st_mtime));      
+         printf("%-22s %-10s %5ld %-25s %-30s\n","*** NOT BACKUPED ***","ON DISK",nTL,curWAL,(char *)&wrkstr);
+      }
+      else
+      {
+         not_backuped++;
+      }
+   }
+
    memEndModule();
    return;
 };

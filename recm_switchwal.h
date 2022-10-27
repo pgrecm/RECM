@@ -8,16 +8,10 @@
 /**********************************************************************************/
 void COMMAND_SWITCHWAL(int idcmd,char *command_line)
 {
-   if (CLUisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any cluster.\n");
-      return;
-   };
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (CLUisConnected(true) == false) return;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
    
    cluster_doSwitchWAL( optionIsSET("opt_nochkpt")==false );
 
-   globalArgs.verbosity=saved_verbose;
 }

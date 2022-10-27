@@ -13,7 +13,34 @@
 /*         /before=<STRING>          Delete all backup where UID is older         */
 /*         /after=<STRING>           Delete all backup where UID is younger       */
 /**********************************************************************************/
-void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
+/*
+@command delete backup
+@definition
+Remove backup from the deposit.
+By using option '/incomplete','/obsolete','/failed', you remove unuseable backups.
+To remove an active backup, the only way is to use it's UID.
+
+@option "/incomplete"           "Delete INCOMPLETE backups"             
+@option "/obsolete"             "Delete OBSOLETE backups"               
+@option "/failed"               "Delete FAILED backups"                 
+@option "/noremove"             "Delete entries from DEPOSIT only"      
+@option "/uid=STRING"           "Delete a backup by it's UID"           
+@option "/uid=UID1,UID2..."     "Delete multipe backups by UIDs"        
+@option "/before=STRING"        "Delete all backup where UID is older"  
+         /after=STRING"         "Delete all backup where UID is younger"
+@example
+@inrecm delete backup /obsolete /verbose 
+@out recm-inf: Scanning Backup WAL '00016336cb080bbb20c8' (OBSOLETE)
+@out recm-inf:  Removing physical file '/Volumes/pg_backups/00016336cb080bbb20c8_1_WAL.recm'
+@out recm-inf: Scanning Backup WAL '000163370347259de200' (OBSOLETE)
+@out ...
+@out recm-inf: Scanning Backup WAL '0001633b30072897f7c0' (OBSOLETE)
+@out recm-inf:  Removing physical file '/Volumes/pg_backups/0001633b30072897f7c0_1_WAL.recm'
+@inrecm
+@end
+ 
+*/
+void COMMAND_DELETEBACKUP (int idcmd,char *command_line)
 {
    if (isConnectedAndRegistered() == false) return;
    
@@ -24,10 +51,10 @@ void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
    }
    
    memBeginModule();
+
    int opt_noremove=optionIsSET("opt_noremove");
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    int min_opt=0;
    char *bckid_list=memAlloc(1024);
@@ -92,10 +119,8 @@ void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
    };
    char *f_bcktyp=memAlloc(20);
    char *f_bck_id=memAlloc(20);
-   char *f_bcksts=memAlloc(10);
    char *f_bdate=memAlloc(40);
    char *sf_pcnam=memAlloc(1024);
-   char *sf_pc_id=memAlloc(128);
    int rows=DEPOquery(query,0);
    if (rows == 0)
    {
@@ -187,6 +212,5 @@ void COMMAND_DELETEBACKUP (int idcmd,const char *command_line)
       rc=DEPOquery(query,0);
       DEPOqueryEnd();
    }
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
 }

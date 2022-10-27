@@ -13,11 +13,7 @@
 /**********************************************************************************/
 void COMMAND_SHOWDEPOSIT(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   };
+   if (DEPOisConnected(true) == false) return;
    
    int id=0;
    if (optionIsSET("opt_name")        == true) { printf("Deposit Name='%s'\n", varGet(GVAR_DEPNAME)); id++; }; 
@@ -32,6 +28,7 @@ void COMMAND_SHOWDEPOSIT(int idcmd,char *command_line)
       char *query=malloc(1024);
       sprintf(query,"select version from %s.config",varGet(GVAR_DEPUSER));
       int rows=DEPOquery(query,0);
+      TRACE("[rc=%d]\n",rows);
       printf("Version='%s'\n",     DEPOgetString(0,0));   
       DEPOqueryEnd();
       free(query);
@@ -45,8 +42,8 @@ void COMMAND_SHOWDEPOSIT(int idcmd,char *command_line)
                     varGet(GVAR_CLUDATE_FORMAT),
                     varGet(GVAR_DEPUSER));
       int rows=DEPOquery(query,0);
-      
-      printf("%s ( %s )\n",DEPOgetString(0,0),varGet(RECM_VERSION));
+      TRACE("[rc=%d]\n",rows);
+      printf("%s ( %s  - build %d )\n",DEPOgetString(0,0),CURRENT_VERSION,CURRENT_BUILD);
       printf("Deposit parameters\n");
       printSection("Default");
       printOption("Deposit Name",   "",            varGet(GVAR_DEPNAME));

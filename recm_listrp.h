@@ -9,14 +9,32 @@
 /*            /after=<DATE>   list RP after a date                                */
 /*            /cid=<CID>      list RP of an other cluster                         */
 /**********************************************************************************/
+/*
+@command list restore point
+@definition
+Display all restore point defined via command '{&create restore point&}'.
+
+@option "/nocid"       "list all restore of ALL registered clusters"
+@option "/before=DATE" "list RP before the date"
+@option "/after=DATE"  "list RP after the date"
+@option "/icd=CID"     "list RP of a different cluster."
+ 
+@example
+@inrecm list restore point
+@out List restore point of cluster 'CLU12' (CID=1)
+@out Name                 Date                 Type       LSN             TL     WALfile
+@out -------------------- -------------------- ---------- --------------- ------ ------------------------
+@out my_first_rp          2022-10-14 20:37:55  TEMPORARY  73/53000090     36     000000240000007300000053 (AVAILABLE)
+@out 
+@inrecm
+@end
+ 
+*/
 void COMMAND_LISTRP(int idcmd,char *command_line)
 {
-   if (DEPOisConnected() == false) 
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
-   if ((CLUisConnected() == false) &&
+   if (DEPOisConnected(true) == false) return;
+
+   if ((CLUisConnected(false) == false) &&
         qualifierIsUNSET("qal_source") == true && 
         qualifierIsUNSET("qal_cid") == true)
    {
@@ -29,7 +47,7 @@ void COMMAND_LISTRP(int idcmd,char *command_line)
    long cluster_id;
    char *cluster_name=memAlloc(128); 
    
-   if (CLUisConnected() == true)
+   if (CLUisConnected(false) == true)
    {
       if (strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0) cluster_id=varGetLong(GVAR_CLUCID);
       if (strcmp(varGet(GVAR_CLUNAME),VAR_UNSET_VALUE) != 0) strcpy(cluster_name,varGet(GVAR_CLUNAME));

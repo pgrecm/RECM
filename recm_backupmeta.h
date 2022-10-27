@@ -9,9 +9,39 @@
 /*         /tag=<String>             Define custom keyword to backup.             */
 /*         /db=<dblist>              list all databases to proceed                */
 /**********************************************************************************/
+/*
+@command backup meta
+@definition
+Generated METADATA (DDL) backup of PostgreSQL database.
+This is a backup of the structure, without data.
+(See also {&restore meta&} for restoring METADATA files)
+
+@option "/verbose" "Display more details"
+@option "/tag=TAG"           "Change default TAG value. (Default is 'YYYY_MM_DD_HHhMM'"
+@option "/db=LIST"           "Specify the databases to generate the META backup"
+@option "/lock"              "Disable retention policy for this backup"
+@example
+@inrecm backup meta /verbose 
+@out recm-inf: Creating meta sql file '/Library/PostgreSQL/12/data/recm_meta/metadata_CLU12_demo.sql' for database 'demo'
+@out recm-inf: Creating piece '/Volumes/pg_backups/0001633f12c81ef49b38_1_META.recm'
+@out recm-inf: Creating meta sql file '/Library/PostgreSQL/12/data/recm_meta/metadata_CLU12_depo_prod.sql' for database 'depo_prod'
+@out recm-inf: Creating meta sql file '/Library/PostgreSQL/12/data/recm_meta/metadata_CLU12_limkydb.sql' for database 'limkydb'
+@out recm-inf: Creating meta sql file '/Library/PostgreSQL/12/data/recm_meta/metadata_CLU12_recm_db2.sql' for database 'recm_db2'
+@out recm-inf: Creating meta sql file '/Library/PostgreSQL/12/data/recm_meta/metadata_CLU12_recmdb.sql' for database 'recmdb'
+@out recm-inf: Creating meta sql file '/Library/PostgreSQL/12/data/recm_meta/metadata_CLU12_recmrepo.sql' for database 'recmrepo'
+@out recm-inf: Backup Piece /Volumes/pg_backups/0001633f12c81ef49b38_1_META.recm FileSize=9824 (Compression ratio: 80.29%)
+@out recm-inf: Backup META UID '0001633f12c81ef49b38' succesfully created.
+@out recm-inf: Total pieces ......... : 1       
+@out recm-inf: Total files backuped.. : 6       
+@out recm-inf: Total Backup size .... : 49843    (48 KB)
+@inrecm
+@end
+*/
+
 void COMMAND_BACKUPMETA(int idcmd,char *command_line)
 {
    long BACKUP_OPTIONS=0; 
+//   zip_t *zipHandle=NULL;
    
    if (isConnectedAndRegistered() == false) return;
 
@@ -60,9 +90,7 @@ void COMMAND_BACKUPMETA(int idcmd,char *command_line)
       return; 
    };
 
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    varAdd(RECM_BCKTYPE,RECM_BCKTYP_META);
     
@@ -123,9 +151,18 @@ void COMMAND_BACKUPMETA(int idcmd,char *command_line)
    RECMClearPieceList();
    createSequence(1);                                                                                                              // Reset Backup Piece sequence
    createUID();                                                                                                                    // Create UID     
+
+   char *tarFileName=malloc(1024);
+   sprintf(tarFileName,"%s/%s_1_%s.recm",                                                                                          // Only 1 piece
+                       varGet(GVAR_BACKUPDIR),
+                       varGet(RECM_BCKID),
+                       varGet(RECM_BCKTYPE));
+   
+   RECMDataFile *hDF=NULL;
    // Loop on ALL databases
    char *dbname=memAlloc(256);
    char *dboid=memAlloc(10);
+   char *query=memAlloc(1024);
    int dbtyp;
    int rows_db=CLUquery("with masterdb as (select datname,oid from pg_database where oid=(select min(oid) from pg_database where oid > (select oid from pg_database where datname='template0')))"
                        " select d.oid,d.datname,case when d.oid = m.oid then 0 else case d.datistemplate when true then 1 else 2 end end dbtype" 
@@ -215,9 +252,43 @@ void COMMAND_BACKUPMETA(int idcmd,char *command_line)
                   TRACE("pg_dump=%s\n",pg_dump);
                   VERBOSE("Creating meta sql file '%s' for database '%s'\n",dumpfile,dbname);
                   shell(pg_dump,true);
-                  if (RECMaddFile(getFileNameOnly(dumpfile),dumpfile,varGet(GVAR_CLUPGDATA)) == false) errcnt++;
+                  if (hDF == NULL)
+                  {
+                     // Load special information for restore
+                     int rcx=CLUquery("select setting from pg_settings where name='log_timezone'",0);
+                     varAdd(GVAR_CLUTZ,CLUgetString(0,0));
+                     CLUqueryEnd();
+                     rcx=CLUquery("select setting from pg_settings where name='DateStyle'",0);
+                     varAdd(GVAR_CLUDS,CLUgetString(0,0));
+                     CLUqueryEnd();
+                     sprintf(query,"insert into %s.backups (cid,bcktyp,bcksts,bck_id,bcktag,hstname,pgdata,pgversion,"
+                                   "timeline,options,bcksize,pcount,ztime,sdate,bckdir)"
+                                   " values (%s,'%s',%d,'%s','%s','%s','%s',%d,%ld,%ld,%ld,1,'%s','%s','%s')",
+                                   //        cid typ   id   tag  hst  dta  ver tm opt siz 
+                                   varGet(GVAR_DEPUSER),
+                                   varGet(GVAR_CLUCID),
+                                   varGet(RECM_BCKTYPE),
+                                   RECM_BACKUP_STATE_RUNNING,
+                                   varGet(RECM_BCKID),
+                                   tag,
+                                   varGet(GVAR_CLUHOST),
+                                   varGet(GVAR_CLUPGDATA),
+                                   varGetInt(GVAR_CLUVERSION),
+                                   TL,
+                                   BACKUP_OPTIONS,
+                                   0L,
+                                   varGet(GVAR_CLUTZ),
+                                   varGet(GVAR_CLUDS),
+                                   varGet(GVAR_BACKUPDIR));
+                     rcx=DEPOquery(query,0);
+                     DEPOqueryEnd();
+                     hDF=RECMcreate(tarFileName,1,varGetInt(GVAR_COMPLEVEL));
+                     free(tarFileName);  
+                  };
                   struct stat st;
                   int rc=stat(dumpfile, &st);
+                  TRACE("stat '%s'[rc=%d]\n",dumpfile,rc);
+                  if (RECMaddFile(hDF,getFileNameOnly(dumpfile),dumpfile,varGet(GVAR_CLUPGDATA),st.st_mode,st.st_uid,st.st_gid) == false) errcnt++;
                   total_backup_files++;
                   total_backup_size+=st.st_size;
                   free(dumpfile);
@@ -230,40 +301,33 @@ void COMMAND_BACKUPMETA(int idcmd,char *command_line)
 
    if (total_backup_files > 0 && errcnt == 0)
    {
-      RECMclose(total_backup_size,total_backup_files);
+      RECMclose(hDF,total_backup_size,total_backup_files);
+      RECMUpdateDepositAtClose(hDF,total_backup_size,total_backup_files);
       
-      // Load special information for restore
-      int rcx=CLUquery("select setting from pg_settings where name='log_timezone'",0);
-      varAdd(GVAR_CLUTZ,CLUgetString(0,0));
-      CLUqueryEnd();
-      rcx=CLUquery("select setting from pg_settings where name='DateStyle'",0);
-      varAdd(GVAR_CLUDS,CLUgetString(0,0));
-      CLUqueryEnd();
+      // Update status of backup
+      sprintf(query,"update %s.backups set bcksts=%d,bcksize=%ld,pcount=%d,edate=current_timestamp "                                  // Update backup record to become 'AVAILABLE'
+                    " where cid=%s and bck_id='%s'",
+                    varGet(GVAR_DEPUSER),
+                    RECM_BACKUP_STATE_AVAILABLE,
+                    total_backup_size,
+                    1,
+                    varGet(GVAR_CLUCID),
+                    varGet(RECM_BCKID));
+      DEPOquery(query,0);      
+
+      // Update cluster record for last backup config date.
+      sprintf(query,"update %s.clusters set lstmeta=(select max(bdate) from %s.backups b "
+                    " where bcktyp='%s' and cid=%s) where cid=%s",
+                      varGet(GVAR_DEPUSER),
+                      varGet(GVAR_DEPUSER),
+                      varGet(RECM_BCKTYPE),
+                      varGet(GVAR_CLUCID),
+                      varGet(GVAR_CLUCID));
+      DEPOquery(query,1);
+      DEPOqueryEnd();     
       
-      char *query=malloc(1024);
-      sprintf(query,"insert into %s.backups (cid,bcktyp,bcksts,bck_id,bcktag,hstname,pgdata,pgversion,"
-                                             "timeline,options,bcksize,pcount,ztime,sdate,bckdir)"
-                    " values (%s,'%s',0,'%s','%s','%s','%s',%d,%ld,%ld,%ld,1,'%s','%s','%s')",
-                    //        cid typ   id   tag  hst  dta  ver tm opt siz 
-                       varGet(GVAR_DEPUSER),
-                       varGet(GVAR_CLUCID),
-                       varGet(RECM_BCKTYPE),
-                       varGet(RECM_BCKID),
-                       tag,
-                       varGet(GVAR_CLUHOST),
-                       varGet(GVAR_CLUPGDATA),
-                       varGetInt(GVAR_CLUVERSION),
-                       pgGetCurrentTimeline(),
-                       BACKUP_OPTIONS,
-                       total_backup_size,
-                       varGet(GVAR_CLUTZ),
-                       varGet(GVAR_CLUDS),
-                       varGet(GVAR_BACKUPDIR));
-      DEPOquery(query,0);
-      DEPOqueryEnd();
-      free(query);
       RECMsetProperties(varGet(RECM_BCKID));
-      INFO("Backup UID : %s\n",varGet(RECM_BCKID));
+      INFO("Backup %s UID '%s' succesfully created.\n",varGet(RECM_BCKTYPE),varGet(RECM_BCKID));
       INFO("Total pieces ......... : %-8ld\n",1L);
       INFO("Total files backuped.. : %-8ld\n",total_backup_files);
       INFO("Total Backup size .... : %-8ld (%s)\n",total_backup_size, DisplayprettySize(total_backup_size) );
@@ -272,8 +336,6 @@ void COMMAND_BACKUPMETA(int idcmd,char *command_line)
    {
      if (errcnt == 0) VERBOSE("No META to backup.\n");
    }
-   
    memEndModule();
-   globalArgs.verbosity=saved_verbose;
    return;
 }

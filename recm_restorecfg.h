@@ -14,10 +14,49 @@
 /*         /after=<DATE>              Find a backup with a given date after       */
 /*         /tag=<STRING>              Search for a backup by it's TAG             */
 /**********************************************************************************/
+/*
+@command restore config
+@definition
+Restore configuration file(s).
+The '/directory' allow you to restore files onto a different folder.
+(See {&backup config&} command for more details)
+
+
+@option "/overwrite"               "Overwrite existing file"                           
+@option "/verbose"                 "Display more details"
+@option "/cid=STRING"              "use a backup from a different cluster"  
+@option "/uid=STRING"              "use a specified backup"                  
+@option "/file=FILE"               "Select file to restore"                  
+@option "/directory=PATH"          "Destination folder"                      
+@option "/before=DATE"             "Find a backup with a given date before"  
+@option "/after=DATE"              "Find a backup with a given date after "  
+@option "/tag=STRING"              "Search for a backup by it's TAG"         
+
+@example
+@inrecm {&list backup&} /cfg 
+@out List backups of cluster 'CLU12' (CID=1)
+@out UID                    Date                 Type   Status       TL          Size  Tag
+@out ---------------------- -------------------- ------ ------------ ----   ---------- -------------------------
+@out 0001634eec000ebe3f08   2022-10-18 20:10:08  CFG    AVAILABLE    36           8 KB 20221018_CLU12_CFG
+@out
+@inrecm {&backup config&} /uid=0001634eec000ebe3f08 /directory="/tmp" /verbose 
+@out recm-inf: Found backup UID '0001634eec000ebe3f08', piece '/Volumes/pg_backups//0001634eec000ebe3f08_1_CFG.recm' of date '2022-10-18 20:10:08'
+@out recm-inf: Restoring file '/tmp/postgresql.auto.conf'
+@out recm-inf: Restoring file '/tmp/pg_hba.conf'
+@out recm-inf: Restoring file '/tmp/pg_ident.conf'
+@out recm-inf: Restoring file '/tmp/postgresql.conf'
+@inrecm
+@end
+*/
 void COMMAND_RESTORECFG(int idcmd,char *command_line)
 {
-   memBeginModule();
    long cluster_id=0;
+//   zip_t *zipHandle;
+   RECMDataFile *hDF;
+
+   if (DEPOisConnected(true) == false) return;
+   
+   memBeginModule();
    
    char *SRCDIR=memAlloc(1024);
      
@@ -73,14 +112,11 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
 
    TRACE("destination_folder=%s\n",destination_folder);
 
-   long restored=0;
    long datablock_size=getHumanSize(GVAR_CLUREADBLOCKSIZE);                       // Allocate a buffer. Size is coming from variable 'GVAR_CLUREADBLOCKSIZE'
    if (datablock_size < 1024) datablock_size=163840;
    char *datablock=memAlloc(datablock_size);
 
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
 
    char *qry_before=memAlloc(128); qry_before[0]=0x00; 
    char *qry_after=memAlloc(128);  qry_after[0]=0x00; 
@@ -121,7 +157,6 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
    if (wal_rows == 0)
    {
       INFO("No CONFIG backup found.\n");
-      globalArgs.verbosity=saved_verbose;
       memEndModule();
       return;
    }
@@ -135,10 +170,10 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
       sprintf(pname,"%s/%s",SRCDIR,DEPOgetString(i,1));
 
       VERBOSE("Found backup UID '%s', piece '%s' of date '%s'\n",bck_id,pname,bck_dat);
-      if (RECMopenRead(pname) == false)
+      hDF=RECMopenRead(pname);
+      if (hDF == NULL)
       {
          ERROR(ERR_INVRECMFIL,"Corrupted or invalid RECM file '%s'\n",pname);
-         globalArgs.verbosity=saved_verbose;
          memEndModule();
          return;
       }
@@ -152,9 +187,9 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
          struct zip_stat sb;
          struct zip_file *zf;
          int file_index=0;
-         while( file_index < zip_get_num_entries(zipHandle, 0))
+         while( file_index < zip_get_num_entries(hDF->zipHandle, 0))
          {
-            if (zip_stat_index(zipHandle, file_index, 0, &sb) == 0) 
+            if (zip_stat_index(hDF->zipHandle, file_index, 0, &sb) == 0) 
             {
                char *filnam=extractFileName(sb.name);
                sprintf(outfile,"%s/%s",destination_folder,filnam);
@@ -184,13 +219,12 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
                
                if (accept)
                {
-                  RecmFileItemProperties *fileprop=RECMGetFileProperties(file_index);
+                  RecmFileItemProperties *fileprop=RECMGetFileProperties(hDF,file_index);
                   VERBOSE("Restoring file '%s'\n",outfile);
-                  zf = zip_fopen_index(zipHandle, file_index, 0);
+                  zf = zip_fopen_index(hDF->zipHandle, file_index, 0);
                   if (!zf) 
                   {
-                     ERROR(ERR_BADPIECE, "Cannot process piece '%s': %s\n",pname,zip_strerror(zipHandle));
-                     globalArgs.verbosity=saved_verbose;
+                     ERROR(ERR_BADPIECE, "Cannot process piece '%s': %s\n",pname,zip_strerror(hDF->zipHandle));
                      memEndModule();
                      return;
                   }
@@ -198,7 +232,6 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
                   if (fd < 0) 
                   {
                      ERROR(ERR_CREATEFILE, "Cannot create file '%s': %s\n",outfile,strerror(errno));
-                     globalArgs.verbosity=saved_verbose;
                      memEndModule();
                      return;
                   }
@@ -209,7 +242,6 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
                       if (len < 0) 
                       {
                           ERROR(ERR_BADPIECE, "Cannot process piece '%s'\n",pname);
-                          globalArgs.verbosity=saved_verbose;
                           memEndModule();
                           return;
                       }
@@ -230,8 +262,8 @@ if (directory_exist(varGet(GVAR_BACKUPDIR)) == false)
             file_index++;
          }
       }
+      RECMcloseRead(hDF);
    }
    DEPOqueryEnd();
-   globalArgs.verbosity=saved_verbose;
    memEndModule();
 }

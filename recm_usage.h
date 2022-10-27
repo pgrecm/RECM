@@ -1,9 +1,13 @@
+/*
+@nodoc excluded from html generator
+*/
+
 /********************************************************************************/
 /* Display the Header                                                           */
 /********************************************************************************/
 void display_version( void )
 {
-   printf("recm (PostgreSQL) %s\n",VERSION);
+   printf("recm (PostgreSQL) %s (Build %d)\n",CURRENT_VERSION,CURRENT_BUILD);
 }
 
 void display_header( void )
@@ -34,5 +38,5 @@ void display_usage( void )
    printf("\n");
    printf("For more information, type \"\?\" (for internal commands), or consult the recm documentation.\n");
    printf("Report bugs to <recm-bugs@postgresql.org>.\n");
-   ExitApp( ERR_SUCCESS );
+   exit( ERR_SUCCESS );
 }

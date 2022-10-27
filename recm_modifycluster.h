@@ -1,53 +1,100 @@
 /**********************************************************************************/
 /* modify cluster command                                                         */
-/* Usage:                                                                         */
-/*      list wal                                                                  */
-/*      options:                                                                  */
 /*            /enable         Change cluster state                                */
 /*            /disable        Change status to 'incomplete'                       */
 /*            /obsolete       Change status to 'oboslete'                         */
 /*            /lock           disable retention policy                            */
 /*            /unlock         enable retention policy                             */
 /*      Qualifiers:                                                               */
-/*            /backupdir=<PATH>      Modify default backup location               */
-/*            /blksize=<SIZE>        Modify allocation memory                     */
-/*            /cfg=<RETENTION>       Modify configuration backup retention        */
-/*            /compression=<LEVEL>   Change compression level ('-1'=disable)      */
-/*            /cid=<CID>             Cluster ID to modify                         */
-/*            /concurrently=<YES|NO> Recreate index concurrently at restore time  */
-/*            /db=<STRING>           Change default database                      */
-/*            /date_format=<STRING>  Change default date format                   */
-/*            /delwal=<MINUTES>      Delay delete WAL after backup                */
-/*            /description=<STRING>  Change Cluster description                   */
-/*            /full=<RETENTION>      Cluster ID to modify                         */
-/*            /ip=<STRING>           Change Cluster IP                            */
-/*            /maxfiles=<CID>        Change backup piece file limit count         */
-/*            /maxsize=<CID>         Change backup piece size limit               */
-/*            /meta=<RETENTION>      Change METADATA backup retention             */
-/*            /pwd=<CID>             Change Password of user to connect to cluster*/
-/*            /port=<CID>            Change Cluster's port to connect             */
-/*            /repopts=<CID>         Change repliation options                    */
-/*            /reppwd=<CID>          Change repliation user's password            */
-/*            /repusr=<CID>          Change repliation user                       */
-/*            /usr=<CID>             Change user to connect to cluster            */
-/*            /waldir=<CID>          Change WAL backup directory                  */
+/*            /backupdir=PATH"      Modify default backup location                */
+/*            /blksize=SIZE"        Modify allocation memory                      */
+/*            /cfg=RETENTION"       Modify configuration backup retention         */
+/*            /compression=LEVEL"   Change compression level ('-1'=disable)       */
+/*            /cid=CID"             Cluster ID to modify                          */
+/*            /concurrently=YES|NO" Recreate index concurrently at restore time   */
+/*            /db=STRING"           Change default database                       */
+/*            /date_format=STRING"  Change default date format                    */
+/*            /delwal=MINUTES"      Delay delete WAL after backup                 */
+/*            /description=STRING"  Change Cluster description                    */
+/*            /full=RETENTION"      Cluster ID to modify                          */
+/*            /ip=STRING"           Change Cluster IP                             */
+/*            /maxfiles=N"          Change backup piece file limit count          */
+/*            /maxsize=N"           Change backup piece size limit                */
+/*            /meta=RETENTION"      Change METADATA backup retention              */
+/*            /pwd=CID"             Change Password of user to connect to cluster */
+/*            /port=N"              Change Cluster's port to connect              */
+/*            /repopts=STRING"      Change repliation options                     */
+/*            /reppwd=STRING"       Change repliation user's password             */
+/*            /repusr=STRING"       Change repliation user                        */
+/*            /usr=STRING"          Change user to connect to cluster             */
+/*            /waldir=PATH"         Change WAL backup directory                   */
+/*            /maxwalfiles=N"       Change backup piece file limit count for WAL  */
+/*            /maxwalsize=N"        Change backup piece size limit       for WAL  */
 /**********************************************************************************/
+/*
+@command modify cluster
+@definition
+Modify the properties of a cluster.
+
+
+@option "/enable"                "Change cluster state"                           
+@option "/disable"               "Change status to 'incomplete'"                  
+@option "/obsolete"              "Change status to 'oboslete'"                    
+@option "/lock"                  "disable retention policy"                       
+@option "/unlock"                "enable retention policy"                        
+@option "/backupdir=PATH"        "Modify default backup location"          
+@option "/blksize=SIZE"          "Modify allocation memory"                
+@option "/cfg=RETENTION"         "Modify configuration backup retention"   
+@option "/compression=LEVEL"     "Change compression level ('-1'=disable)" 
+@option "/cid=CID"               "Cluster ID to modify"                    
+@option "/concurrently=YES|NO"   "Recreate index concurrently at restore time"
+@option "/db=STRING"             "Change default database"                 
+@option "/date_format=STRING"    "Change default date format"              
+@option "/delwal=MINUTES"        "Delay delete WAL after backup"           
+@option "/description=STRING"    "Change Cluster description"              
+@option "/full=RETENTION"        "Cluster ID to modify"                    
+@option "/ip=STRING"             "Change Cluster IP" 
+@option "/maxfiles=N"            "Change backup piece file limit count (Minimum value is 10)"
+@option "/maxsize=N"             "Change backup piece size limit.<br>Accept values like '100k'|'25m'|'16g' (Minimum value is 10M)"
+@option "/meta=RETENTION"        "Change METADATA backup retention"
+@option "/pwd=CID"               "Change Password of user to connect to cluster"
+@option "/port=N"                "Change Cluster's port to connect"        
+@option "/repopts=STRING"        "Change repliation options"               
+@option "/reppwd=STRING"         "Change repliation user's password"
+@option "/repusr=STRING"         "Change repliation user"
+@option "/usr=STRING"            "Change user to connect to cluster"
+@option "/waldir=PATH"           "Change WAL backup directory"
+@option "/maxwalfiles=N"         "Change backup piece file limit count for WAL (Minimum value is 10)"
+@option "/maxwalsize=N"          "Change backup piece size limit size for WAL.<br>Accept values like '1k'|'2m'|'2g' (Minimum value is 4M)"
+
+@example
+@inrecm list cluster 
+@out List of registered clusters
+@out 
+@out CID        State           Name                 IP              Description
+@out ---------- --------------- ---------------      -------------------- ------------------------------
+@out 1          ENABLED         CLU12                192.168.1.62    (null)
+@inrecm modify cluster/desc="Cluster Version 12" 
+@out recm-inf: Cluster 'CLU12' changed.
+@inrecm list cluster 
+@out List of registered clusters
+@out 
+@out CID        State           Name                 IP              Description
+@out ---------- --------------- ---------------      -------------------- ------------------------------
+@out 1          ENABLED         CLU12                192.168.1.62    Cluster Version 12
+@out 
+@inrecm
+@end
+
+*/
 void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
 {
    int cluster_is_local=true;
-   if (DEPOisConnected() == false)
-   {
-      ERROR(ERR_NOTCONNECTED,"Not connected to any deposit.\n");
-      return;
-   }
+   if (DEPOisConnected(true) == false) return;
    
    memBeginModule();
    
-   // Change verbosity
-   int opt_verbose=optionIsSET("opt_verbose");
-   int saved_verbose=globalArgs.verbosity;
-   globalArgs.verbosity=opt_verbose;
-
+   if (optionIsSET("opt_verbose") == true) globalArgs.verbosity=true;                                                              // Set Verbosity
    
    int cluster_id;
    if (varExist(GVAR_CLUCID) == true && strcmp(varGet(GVAR_CLUCID),VAR_UNSET_VALUE) != 0) cluster_id=varGetInt(GVAR_CLUCID);
@@ -156,7 +203,7 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
    
 
    // option 'delwal'
-   if (qualifierIsUNSET("qal_delwal") == false)                                  // modify cluster/delwal=<value>
+   if (qualifierIsUNSET("qal_delwal") == false)                                  // modify cluster/delwal=value"
    {  
       int opt_delwal=varGetLong("qal_delwal");
       if (opt_delwal < -1) opt_delwal=-1;                                        // -1 is for disable deltion
@@ -182,9 +229,9 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
    // option 'full'
    if (qualifierIsUNSET("qal_full") == false)
    {
-      if (validRetention(varGet("qal_full")) == false)                          // set cluster/meta="[count|days]:<value>"
+      if (validRetention(varGet("qal_full")) == false)                          // set cluster/meta="[count|days]"
       { 
-         ERROR(ERR_INVALIDFORMAT,"Invalid format '%s'. Should contain '<count|days>:<value>'\n",
+         ERROR(ERR_INVALIDFORMAT,"Invalid format '%s'. Should contain 'count|days'\n",
                                  varGet("qal_full"));
       }
       else
@@ -198,16 +245,16 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
    // option 'cfg'
    if (qualifierIsUNSET("qal_cfg") == false)
    {
-      if (validRetention(varGet("qal_cfg")) == false)                          // set cluster/meta="[count|day]:<value>"
+      if (validRetention(varGet("qal_cfg")) == false)                          // set cluster/meta="[count|day]"
       { 
-         ERROR(ERR_INVALIDFORMAT,"Invalid format '%s'. Should contain '<count|days>:<value>'\n",
+         ERROR(ERR_INVALIDFORMAT,"Invalid format '%s'. Should contain 'count|days'\n",
                                  varGet("qal_cfg"));
       }
       else
       {
          sprintf(qry_state,"%c opt_retcfg='%s'",virgule,varGet("qal_cfg"));
          strcat(query,qry_state);
-         varAdd(GVAR_CLURETENTION_CONFIG,varGet("qal_full"));
+         varAdd(GVAR_CLURETENTION_CONFIG,varGet("qal_cfg"));
          virgule=',';
       };
    };
@@ -215,16 +262,16 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
    // option 'meta'
    if (qualifierIsUNSET("qal_meta") == false)
    {
-      if (validRetention(varGet("qal_meta")) == false)                          // set cluster/meta="[count|day]:<value>"
+      if (validRetention(varGet("qal_meta")) == false)                          // set cluster/meta="[count|day]"
       { 
-         ERROR(ERR_INVALIDFORMAT,"Invalid format '%s'. Should contain '<count|days>:<value>'\n",
+         ERROR(ERR_INVALIDFORMAT,"Invalid format '%s'. Should contain 'count|days'\n",
                                  varGet("qal_meta"));
       }
       else
       {
          sprintf(qry_state,"%c opt_retmeta='%s'",virgule,varGet("qal_meta"));
          strcat(query,qry_state);
-         varAdd(GVAR_CLURETENTION_META,varGet("qal_full"));
+         varAdd(GVAR_CLURETENTION_META,varGet("qal_meta"));
          virgule=',';
       };
    };
@@ -238,7 +285,7 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
       virgule=',';
    };
    // option 'maxfiles'
-   if (qualifierIsUNSET("qal_maxfiles") == false)                               // modify cluster/maxfiles=<count>
+   if (qualifierIsUNSET("qal_maxfiles") == false)                               // modify cluster/maxfiles=count"
    {
       TRACE("set MAXFILES='%s'\n",varGet("qal_maxfiles"));
       varAdd(GVAR_CLUBACKUP_MAXFILES,varGet("qal_maxfiles"));  
@@ -246,7 +293,24 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
       strcat(query,qry_state);
       virgule=',';
    }
-
+   // option 'maxwalfiles'
+   if (qualifierIsUNSET("qal_maxwalfiles") == false)                               // modify cluster/maxfiles=count"
+   {
+      TRACE("set MAXWALFILES='%s'\n",varGet("qal_maxwalfiles"));
+      varAdd(GVAR_CLUBACKUP_MAXWALFILES,varGet("qal_maxwalfiles"));  
+      sprintf(qry_state,"%c opt_maxwfiles=%ld",virgule,varGetLong("qal_maxwalfiles"));
+      strcat(query,qry_state);
+      virgule=',';
+   }
+   // option 'maxwalsize'
+   if (qualifierIsUNSET("qal_maxwalsize") == false)                                // modify cluster/maxsize=nM|G
+   {
+      TRACE("set MAXWALSIZE='%s'\n",varGet("qal_maxwalsize"));
+      varAdd(GVAR_CLUBACKUP_MAXWALSIZE,varGet("qal_maxwalsize"));  
+      sprintf(qry_state,"%c opt_maxwsize='%s'",virgule,varGet("qal_maxwalsize"));
+      strcat(query,qry_state);
+      virgule=',';
+   };
    // option 'concurrently' from version 12
    if (qualifierIsUNSET("qal_concurrently") == false)                           // modify cluster/concurrently=yes|no
    {
@@ -399,6 +463,7 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
    {
       strcat(query,qry_where);
       int row=DEPOquery(query,0);
+      TRACE("[rc=%d]\n",row);
       if (DEPOrowCount() == 0)
       {
          ERROR(ERR_BACKUPNOTFND,"Cluster '%s' not found in DEPOSIT.\n",cluster_name);
@@ -419,7 +484,6 @@ void COMMAND_MODIFYCLUSTER(int idcmd,char *command_line)
       INFO("Cluster '%s' changed.\n",cluster_name);
    }
    memEndModule();
-   globalArgs.verbosity=saved_verbose;
    return;
 };
 
